@@ -3,26 +3,26 @@
 #include "error_helpers.h"
 #include "progress_merger.h"
 
-#include <ydb/library/yql/providers/yt/lib/log/yt_logger.h>
-#include <ydb/library/yql/providers/yt/lib/yt_download/yt_download.h>
-#include <ydb/library/yql/providers/yt/gateway/native/yql_yt_native.h>
-#include <ydb/library/yql/providers/yt/provider/yql_yt_provider.h>
+#include <contrib/ydb/library/yql/providers/yt/lib/log/yt_logger.h>
+#include <contrib/ydb/library/yql/providers/yt/lib/yt_download/yt_download.h>
+#include <contrib/ydb/library/yql/providers/yt/gateway/native/yql_yt_native.h>
+#include <contrib/ydb/library/yql/providers/yt/provider/yql_yt_provider.h>
 
-#include <ydb/library/yql/providers/common/udf_resolve/yql_simple_udf_resolver.h>
-#include "ydb/library/yql/providers/common/proto/gateways_config.pb.h"
-#include <ydb/library/yql/providers/common/provider/yql_provider_names.h>
+#include <contrib/ydb/library/yql/providers/common/udf_resolve/yql_simple_udf_resolver.h>
+#include "contrib/ydb/library/yql/providers/common/proto/gateways_config.pb.h"
+#include <contrib/ydb/library/yql/providers/common/provider/yql_provider_names.h>
 
-#include <ydb/library/yql/ast/yql_expr.h>
-#include <ydb/library/yql/minikql/mkql_function_registry.h>
-#include <ydb/library/yql/minikql/invoke_builtins/mkql_builtins.h>
-#include <ydb/library/yql/core/facade/yql_facade.h>
-#include <ydb/library/yql/core/file_storage/file_storage.h>
-#include "ydb/library/yql/core/file_storage/proto/file_storage.pb.h"
-#include <ydb/library/yql/core/services/mounts/yql_mounts.h>
-#include <ydb/library/yql/core/services/yql_transform_pipeline.h>
-#include <ydb/library/yql/core/url_preprocessing/url_preprocessing.h>
-#include <ydb/library/yql/utils/log/log.h>
-#include <ydb/library/yql/utils/backtrace/backtrace.h>
+#include <contrib/ydb/library/yql/ast/yql_expr.h>
+#include <contrib/ydb/library/yql/minikql/mkql_function_registry.h>
+#include <contrib/ydb/library/yql/minikql/invoke_builtins/mkql_builtins.h>
+#include <contrib/ydb/library/yql/core/facade/yql_facade.h>
+#include <contrib/ydb/library/yql/core/file_storage/file_storage.h>
+#include "contrib/ydb/library/yql/core/file_storage/proto/file_storage.pb.h"
+#include <contrib/ydb/library/yql/core/services/mounts/yql_mounts.h>
+#include <contrib/ydb/library/yql/core/services/yql_transform_pipeline.h>
+#include <contrib/ydb/library/yql/core/url_preprocessing/url_preprocessing.h>
+#include <contrib/ydb/library/yql/utils/log/log.h>
+#include <contrib/ydb/library/yql/utils/backtrace/backtrace.h>
 
 #include <yt/cpp/mapreduce/interface/config.h>
 #include <yt/cpp/mapreduce/interface/logging/logger.h>

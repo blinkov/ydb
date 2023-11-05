@@ -2,7 +2,7 @@
 
 #include <util/generic/string.h>
 
-#include <ydb/library/yql/public/issue/yql_issue.h>
+#include <contrib/ydb/library/yql/public/issue/yql_issue.h>
 
 namespace NYT::NYqlPlugin {
 
