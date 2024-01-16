@@ -26,7 +26,7 @@ jobs:
               ['* New feature', 'new-feature'],
               ['* Experimental feature', 'experimental-feature'],
               ['* Improvement', 'improvement'],
-              ['* Performance improvement, 'performance'],
+              ['* Performance improvement', 'performance'],
               ['* Bugfix', 'bugfix'],
               ['* Backward incompatible change', 'backward-incompatible']
               ['* Documentation', 'documentation']
