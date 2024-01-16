@@ -2,7 +2,7 @@ name: PR-labels
 on: 
   pull_request_target:
     branches:
-      - 'main'
+      - 'do-not-merge'
     types:
       - 'opened'
       - 'edited'
