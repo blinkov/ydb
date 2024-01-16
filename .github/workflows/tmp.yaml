@@ -41,6 +41,7 @@ jobs:
                   issue_number: prNumber,
                   labels: [pair[1]]
                 });
+                console.log('Added label', pair[1]);
               } catch(e) {
                 console.log(e);
               }
