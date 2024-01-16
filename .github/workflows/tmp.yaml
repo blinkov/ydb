@@ -35,11 +35,11 @@ jobs:
             for (let pair of mapping) {
               if (!description.includes(pair[0])) continue;
               try {
-                 const result = await github.rest.issues.addLabel({
+                 const result = await github.rest.issues.addLabels({
                   owner,
                   repo,
                   issue_number: prNumber,
-                  name: pair[1]
+                  labels: [pair[1]]
                 });
               } catch(e) {
                 console.log(e);
