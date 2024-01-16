@@ -28,8 +28,8 @@ jobs:
               ['* Improvement', 'improvement'],
               ['* Performance improvement', 'performance'],
               ['* Bugfix', 'bugfix'],
-              ['* Backward incompatible change', 'backward-incompatible']
-              ['* Documentation', 'documentation']
+              ['* Backward incompatible change', 'backward-incompatible'],
+              ['* Documentation', 'documentation'],
               ['* Not for changelog', 'not-for-changelog']
             ];          
             for (let pair of mapping) {
