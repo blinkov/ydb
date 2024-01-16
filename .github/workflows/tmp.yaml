@@ -21,7 +21,7 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
             const prNumber = context.payload.pull_request.number;
-            const description = context.payload.pull_request.description;
+            const description = context.payload.pull_request.body;
             const mapping = [
               ['* New feature', 'new-feature'],
               ['* Experimental feature', 'experimental-feature'],
