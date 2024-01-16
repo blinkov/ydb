@@ -10,7 +10,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
-  manage-labels:
+  update-labels:
     runs-on: ubuntu-latest
     steps:
       - name: Update PR labels
