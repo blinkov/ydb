@@ -1516,6 +1516,10 @@
         {
           "EnableOutputStreams":true
         },
+      "ServicesEnabled":
+        [
+          "legacy"
+        ],
       "KeepAliveEnable":true,
       "KeepAliveIdleTimeoutTriggerSec":90,
       "KeepAliveMaxProbeCount":3,

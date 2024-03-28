@@ -1566,7 +1566,11 @@
     },
   "GRpcConfig":
     {
-      "Port":2135
+      "Port":2135,
+      "ServicesEnabled":
+        [
+          "legacy"
+        ]
     },
   "AuthConfig":
     {

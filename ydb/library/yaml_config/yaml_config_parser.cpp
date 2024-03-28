@@ -397,8 +397,12 @@ namespace NKikimr::NYaml {
     }
 
     void PrepareGrpcConfig(NKikimrConfig::TAppConfig& config, const NKikimrConfig::TEphemeralInputFields& ephemeralConfig) {
+        auto& grpcConfig = *config.MutableGRpcConfig();
         if (ephemeralConfig.HasTls()) {
-            ephemeralConfig.GetTls().CopyToTGRpcConfig(*config.MutableGRpcConfig());
+            ephemeralConfig.GetTls().CopyToTGRpcConfig(grpcConfig);
+        }
+        if (grpcConfig.GetServicesEnabled().empty()) {
+            grpcConfig.AddServicesEnabled("legacy"); // TODO: deprecate MessageBus
         }
     }
 

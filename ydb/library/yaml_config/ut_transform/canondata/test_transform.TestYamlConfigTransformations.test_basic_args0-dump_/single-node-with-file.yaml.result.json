@@ -1103,6 +1103,13 @@
           }
         ]
     },
+  "GRpcConfig":
+    {
+      "ServicesEnabled":
+        [
+          "legacy"
+        ]
+    },
   "TableServiceConfig":
     {
       "SqlVersion":1
