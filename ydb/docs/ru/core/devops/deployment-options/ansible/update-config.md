@@ -16,14 +16,14 @@ ansible-playbook ydb_platform.ydb.update_config
 
 Задачи в playbook `ydb_platform.ydb.update_config` помечены типами узлов, поэтому вы можете использовать функциональность тегов Ansible для фильтрации узлов по их типу.
 
-Эти две команды эквивалентны и изменят конфигурацию всех [узлов хранения](../../concepts/glossary.md#storage-node):
+Эти две команды эквивалентны и изменят конфигурацию всех [узлов хранения](../../../concepts/glossary.md#storage-node):
 
 ```bash
 ansible-playbook ydb_platform.ydb.update_config --tags storage
 ansible-playbook ydb_platform.ydb.update_config --tags static
 ```
 
-Эти две команды эквивалентны и изменят конфигурацию всех [узлов баз данных](../../concepts/glossary.md#database-node):
+Эти две команды эквивалентны и изменят конфигурацию всех [узлов баз данных](../../../concepts/glossary.md#database-node):
 
 ```bash
 ansible-playbook ydb_platform.ydb.update_config --tags database
@@ -40,6 +40,6 @@ ansible-playbook ydb_platform.ydb.update_config --tags no_restart
 
 ## Динамическая конфигурация
 
-У {{ ydb-short-name }} есть собственный механизм управления конфигурацией под названием [динамическая конфигурация](../../maintenance/manual/dynamic-config.md). Он не зависит от выбранного метода развёртывания кластера и позволяет гибко настраивать кластер даже в мультиарендных средах.
+У {{ ydb-short-name }} есть собственный механизм управления конфигурацией под названием [автоматическая конфигурация](../../../devops/configuration-management/index.md). Он не зависит от выбранного метода развёртывания кластера и позволяет гибко настраивать кластер даже в мультиарендных средах.
 
 Рассмотрите возможность перехода на динамическую конфигурацию, если ручное развёртывание конфигурационных файлов с полной перезагрузкой при любых изменениях больше не приемлемо.

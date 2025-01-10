@@ -1,12 +1,6 @@
 items:
 - name: Первоначальное развёртывание
   href: initial-deployment.md
-- name: Обновление конфигурации
-  href: update-config.md
-- name: Обслуживание кластера
-  href: maintenance.md
-- name: Обновление исполняемого файла
-  href: update-executable.md
 - name: Управление дисковой подсистемой кластера
   include:
     mode: link
@@ -20,8 +14,3 @@ items:
   include:
     mode: link
     path: before-v25.1/toc_p.yaml
-- name: Миграции
-  href: migration/index.md
-  include:
-    mode: link
-    path: migration/toc_p.yaml
