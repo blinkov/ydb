@@ -37,7 +37,7 @@ jobs:
                   user(login: $login) {
                     status {
                       message
-                      limitedAvailability
+                      indicatesLimitedAvailability
                     }
                   }
                 }
@@ -47,7 +47,7 @@ jobs:
                 const status = result.user.status;
                 if (!status) return false;
                 // Consider user busy if limitedAvailability is true or message contains "busy"
-                return status.limitedAvailability === true ||
+                return status.indicatesLimitedAvailability === true ||
                        (status.message && status.message.toLowerCase().includes("busy"));
               } catch (error) {
                 console.log(`Error checking status for ${login}: ${error}`);
