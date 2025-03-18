@@ -58,7 +58,7 @@ jobs:
             // Filter out the PR author and busy members
             const availableMembers = [];
             for (const member of teamMembers) {
-              if (member.login === prAuthor) continue;
+              // if (member.login === prAuthor) continue;
               if (await isBusy(member.login)) {
                 console.log(`Skipping ${member.login} as they appear busy.`);
                 continue;
