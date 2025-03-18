@@ -6,7 +6,7 @@
 #include <ydb/core/kqp/provider/yql_kikimr_provider.h>
 #include <ydb/core/kqp/opt/logical/kqp_opt_log.h>
 
-#include <ydb/library/yql/ast/yql_expr.h>
+#include <yql/essentials/ast/yql_expr.h>
 
 #include <library/cpp/json/writer/json.h>
 
@@ -27,6 +27,9 @@ enum class EPlanTableWriteType {
     MultiUpsert,
     Erase,
     MultiErase,
+    MultiReplace,
+    MultiInsert,
+    MultiUpdate,
 };
 
 /*
@@ -44,7 +47,7 @@ void PhyQuerySetTxPlans(NKqpProto::TKqpPhyQuery& queryProto, const NYql::NNodes:
  */
 TString AddExecStatsToTxPlan(const TString& txPlan, const NYql::NDqProto::TDqExecutionStats& stats);
 
-TString SerializeAnalyzePlan(const NKqpProto::TKqpStatsQuery& queryStats);
+TString SerializeAnalyzePlan(const NKqpProto::TKqpStatsQuery& queryStats, const TString& poolId = "");
 
 TString SerializeScriptPlan(const TVector<const TString>& queryPlans);
 

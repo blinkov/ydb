@@ -241,9 +241,6 @@ message TResponse {
     // TChooseProxyRequest
     optional string ProxyName = 1050;
     optional uint64 ProxyCookie = 1051;
-
-    // Login
-    optional string UserToken = 1102;
 }
 
 message TFakeConfigDummy {
@@ -253,38 +250,6 @@ message TFakeConfigDummy {
 message TTabletCountersRequest {
     optional uint64 TabletID = 1;
     optional bool ConnectToFollower = 2;
-
-    optional bool WithRetry = 10;
-    optional uint64 Timeout = 11;
-}
-
-message TLocalMKQL {
-    message TProgram {
-        optional bytes Bin = 1;
-        optional string Text = 2;
-    };
-
-    message TParams {
-        optional bytes Bin = 1;
-        optional string Text = 2;
-    }
-
-    optional uint64 TabletID = 1;
-    optional NKikimrTxUserProxy.TMiniKQLTransaction Program = 2;
-    optional bool ConnectToFollower = 3;
-
-    optional string SecurityToken = 5;
-
-    optional bool WithRetry = 10;
-    optional uint64 Timeout = 11;
-}
-
-message TLocalSchemeTx {
-    optional uint64 TabletID = 1;
-    optional bool ConnectToFollower = 2;
-    optional NTabletFlatScheme.TSchemeChanges SchemeChanges = 3;
-    optional bool DryRun = 4;
-    optional string SecurityToken = 5;
 
     optional bool WithRetry = 10;
     optional uint64 Timeout = 11;
@@ -394,10 +359,6 @@ message TMessageBusTraceRequest {
 message TMessageBusTraceStatus {
     optional bool TraceActive = 1;
     optional bytes Path = 2;
-};
-
-message TTabletKillRequest {
-    optional uint64 TabletID = 1;
 };
 
 message TTabletStateRequest {
@@ -565,6 +526,9 @@ message TSqsRequest {
         NKikimr.NSQS.TGetQueueAttributesBatchRequest GetQueueAttributesBatch = 22;
         NKikimr.NSQS.TListDeadLetterSourceQueuesRequest ListDeadLetterSourceQueues = 23;
         NKikimr.NSQS.TCountQueuesRequest CountQueues = 24;
+        NKikimr.NSQS.TListQueueTagsRequest ListQueueTags = 25;
+        NKikimr.NSQS.TTagQueueRequest TagQueue = 26;
+        NKikimr.NSQS.TUntagQueueRequest UntagQueue = 27;
     }
     optional string RequestId = 30;
     optional bool RequestRateLimit = 31 [default = true];
@@ -596,11 +560,16 @@ message TSqsResponse {
         NKikimr.NSQS.TGetQueueAttributesBatchResponse GetQueueAttributesBatch = 22;
         NKikimr.NSQS.TListDeadLetterSourceQueuesResponse ListDeadLetterSourceQueues = 23;
         NKikimr.NSQS.TCountQueuesResponse CountQueues = 24;
+        NKikimr.NSQS.TListQueueTagsResponse ListQueueTags = 25;
+        NKikimr.NSQS.TTagQueueResponse TagQueue = 26;
+        NKikimr.NSQS.TUntagQueueResponse UntagQueue = 27;
     }
     optional string RequestId = 30;
     optional string FolderId = 31;
     optional string ResourceId = 32;
     optional bool IsFifo = 33;
+
+    repeated NKikimr.NSQS.TQueueTag QueueTags = 34;
 }
 
 message TSqsActionCounterChanged {
@@ -707,6 +676,7 @@ message TTestShardControlRequest {
         optional uint32 PatchRequestsFractionPPM = 12;
         optional uint32 PutTraceFractionPPM = 13;
         optional uint32 PutTraceVerbosity = 14 [default = 15];
+        optional uint32 SecondsBeforeLoadStart = 15; // number of seconds to wait before starting load
     }
 
     optional uint64 TabletId = 1;
@@ -717,10 +687,3 @@ message TTestShardControlRequest {
 
 message TTestShardControlResponse {
 }
-
-message TLoginRequest {
-    optional string Database = 1;
-    optional string User = 2;
-    optional string Password = 3;
-};
-

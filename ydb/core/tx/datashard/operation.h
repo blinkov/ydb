@@ -857,7 +857,7 @@ public:
     void SetFinishProposeTs(TMonotonic now) noexcept { FinishProposeTs = now; }
     void SetFinishProposeTs() noexcept;
 
-    NWilson::TTraceId GetTraceId() const noexcept {
+    NWilson::TTraceId GetTraceId() const {
         return OperationSpan.GetTraceId();
     }
 
@@ -882,6 +882,12 @@ public:
      * the given operation wasn't planned yet.
      */
     virtual void OnCleanup(TDataShard& self, std::vector<std::unique_ptr<IEventHandle>>& replies);
+
+
+    // CommittingOps book keeping
+    const std::optional<TRowVersion>& GetCommittingOpsVersion() const { return CommittingOpsVersion; }
+    void SetCommittingOpsVersion(const TRowVersion& version) { CommittingOpsVersion = version; }
+    void ResetCommittingOpsVersion() { CommittingOpsVersion.reset(); }
 
 protected:
     TOperation()
@@ -955,6 +961,8 @@ private:
     TMonotonic FinishProposeTs;
 
     static NMiniKQL::IEngineFlat::TValidationInfo EmptyKeysInfo;
+
+    std::optional<TRowVersion> CommittingOpsVersion;
 
 public:
     std::optional<TRowVersion> MvccReadWriteVersion;

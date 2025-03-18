@@ -1,10 +1,19 @@
 #include <ydb/core/tx/schemeshard/ut_helpers/helpers.h>
-#include <ydb/core/tx/schemeshard/schemeshard_utils.h>
+#include <ydb/core/tx/schemeshard/schemeshard_effective_acl.h>
+
+#include <ydb/core/protos/blockstore_config.pb.h>
+#include <ydb/core/protos/table_stats.pb.h>
+#include <ydb/core/protos/schemeshard/operations.pb.h>
 
 #include <util/generic/size_literals.h>
 #include <util/string/cast.h>
 
 #include <locale>
+
+namespace NKikimr::NSchemeShard {
+// defined in ydb/core/tx/schemeshard/schemeshard__table_stats_histogram.cpp
+TSerializedCellVec ChooseSplitKeyByHistogram(const NKikimrTableStats::THistogram& histogram, ui64 total, const TConstArrayRef<NScheme::TTypeInfo>& keyColumnTypes);
+}  // namespace NKikimr::NSchemeShard
 
 using namespace NKikimr;
 using namespace NSchemeShard;
@@ -65,7 +74,7 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
 
         TestDescribeResult(DescribePath(runtime, "/MyRoot/DirA"),
                            {NLs::Finished,
-                            NLs::PathVersionEqual(5)});
+                            NLs::PathVersionEqual(6)});
         TestDescribeResult(DescribePath(runtime, "/MyRoot/DirB"),
                            {NLs::Finished,
                             NLs::PathVersionEqual(3)});
@@ -606,7 +615,7 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
         TestDescribeResult(DescribePath(runtime, "/MyRoot/DirA"),
                            {NLs::PathVersionEqual(6),
                             NLs::HasEffectiveRight("+U:user0@builtin"),
-                            NLs::HasNotEffectiveRight("+U:user1@builtin:-")});
+                            NLs::HasNoEffectiveRight("+U:user1@builtin:-")});
 
         {
             TestMkDir(runtime, ++txId, "/MyRoot/DirA", "DirB");
@@ -616,7 +625,7 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
         TestDescribeResult(DescribePath(runtime, "/MyRoot/DirA/DirB"),
                            {NLs::PathVersionEqual(5),
                             NLs::HasEffectiveRight("+U:user0@builtin"),
-                            NLs::HasNotEffectiveRight("+U:user1@builtin:-")});
+                            NLs::HasNoEffectiveRight("+U:user1@builtin:-")});
 
     }
 
@@ -835,7 +844,7 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
         TestDescribeResult(DescribePath(runtime, "/MyRoot"),
                            {NLs::ChildrenCount(1)});
         TestDescribeResult(DescribePath(runtime, "/MyRoot/DirA"),
-                           {NLs::PathVersionEqual(13),
+                           {NLs::PathVersionEqual(14),
                             NLs::ChildrenCount(5)});
 
         TestDescribeResult(DescribePath(runtime, "/MyRoot/DirA/Table1"),
@@ -1084,7 +1093,7 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
             TableDescription {
               Name: "src2"
               Columns { Name: "key"   Type: "Uint64" }
-              Columns { Name: "value0" Type: "Utf8" }
+              Columns { Name: "value0" Type: "String" }
               Columns { Name: "value1" Type: "Utf8" }
               KeyColumnNames: ["key"]
             }
@@ -1101,6 +1110,23 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
               KeyColumnNames: ["value0"]
               DataColumnNames: ["value1"]
             }
+            IndexDescription {
+              Name: "UserDefinedVectorIndexByValue0CoveringValue1"
+              Type: EIndexTypeGlobalVectorKmeansTree
+              KeyColumnNames: ["value0"]
+              DataColumnNames: ["value1"]
+              VectorIndexKmeansTreeDescription {
+                Settings {
+                  settings {
+                    metric: DISTANCE_COSINE
+                    vector_type: VECTOR_TYPE_INT8
+                    vector_dimension: 2
+                  }
+                  clusters: 3
+                  levels: 5
+                }
+              }
+            }
         )");
 
         TestModificationResult(runtime, txId-2, NKikimrScheme::StatusAccepted);
@@ -1109,12 +1135,17 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
 
         env.TestWaitNotification(runtime, {txId, txId-1 , txId-2});
 
+        static constexpr ui64 PathsInsideWithoutIndexes = 2;
+        static constexpr ui64 PathsInside = PathsInsideWithoutIndexes + 2 + 2 + 2 + 3;
+        static constexpr ui64 ShardsInsideWithoutIndexes = 2;
+        static constexpr ui64 ShardsInside = ShardsInsideWithoutIndexes + 1 + 1 + 1 + 2;
+
         TestDescribeResult(DescribePath(runtime, "/MyRoot/DirA"),
-                           {NLs::PathVersionEqual(7),
+                           {NLs::PathVersionEqual(8),
                             NLs::Finished,
                             NLs::PathExist,
-                            NLs::PathsInsideDomain(9),
-                            NLs::ShardsInsideDomain(5),
+                            NLs::PathsInsideDomain(1 + 1 * PathsInside),
+                            NLs::ShardsInsideDomain(1 * ShardsInside),
                             NLs::ChildrenCount(2)
                            });
 
@@ -1140,12 +1171,12 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
                                                NLs::Finished});
 
         auto dirAVersion = TestDescribeResult(DescribePath(runtime, "/MyRoot/DirA"),
-                                              {NLs::PathVersionEqual(11),
+                                              {NLs::PathVersionEqual(13),
                                                NLs::PathExist,
                                                NLs::Finished,
                                                NLs::PathExist,
-                                               NLs::PathsInsideDomain(17),
-                                               NLs::ShardsInsideDomain(10)});
+                                               NLs::PathsInsideDomain(1 + 2 * PathsInside),
+                                               NLs::ShardsInsideDomain(2 * ShardsInside)});
 
         TestConsistentCopyTables(runtime, ++txId, "/", R"(
                        CopyTableDescriptions {
@@ -1160,11 +1191,11 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
         env.TestWaitNotification(runtime, txId);
 
         TestDescribeResult(DescribePath(runtime, "/MyRoot/DirA"),
-                           {NLs::PathVersionEqual(15),
+                           {NLs::PathVersionEqual(18),
                             NLs::PathExist,
                             NLs::Finished,
-                            NLs::PathsInsideDomain(25),
-                            NLs::ShardsInsideDomain(15),
+                            NLs::PathsInsideDomain(1 + 3 * PathsInside),
+                            NLs::ShardsInsideDomain(3 * ShardsInside),
                             NLs::ChildrenCount(6)
                            });
 
@@ -1203,6 +1234,13 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
                             NLs::IndexKeys({"value0"}),
                             NLs::IndexDataColumns({"value1"})});
 
+        TestDescribeResult(DescribePrivatePath(runtime, "/MyRoot/DirA/dst2/UserDefinedVectorIndexByValue0CoveringValue1"),
+                           {NLs::Finished,
+                            NLs::IndexType(NKikimrSchemeOp::EIndexTypeGlobalVectorKmeansTree),
+                            NLs::IndexState(NKikimrSchemeOp::EIndexStateReady),
+                            NLs::IndexKeys({"value0"}),
+                            NLs::IndexDataColumns({"value1"})});
+
         TestDescribeResult(DescribePrivatePath(runtime, "/MyRoot/DirA/dst2/UserDefinedIndexByValue0CoveringValue1/indexImplTable"),
                            {NLs::Finished});
 
@@ -1218,7 +1256,7 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
                            {NLs::PathVersionEqual(3),
                             NLs::PathExist,
                             NLs::Finished,
-                            NLs::IndexesCount(3),
+                            NLs::IndexesCount(4),
                             NLs::CreatedAt(txId)
                            });
 
@@ -1236,11 +1274,11 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
         env.TestWaitNotification(runtime, txId);
 
         TestDescribeResult(DescribePath(runtime, "/MyRoot/DirA"),
-                           {NLs::PathVersionEqual(19),
+                           {NLs::PathVersionEqual(22),
                             NLs::PathExist,
                             NLs::Finished,
-                            NLs::PathsInsideDomain(27),
-                            NLs::ShardsInsideDomain(17),
+                            NLs::PathsInsideDomain(1 + 3 * PathsInside + PathsInsideWithoutIndexes),
+                            NLs::ShardsInsideDomain(3 * ShardsInside + ShardsInsideWithoutIndexes),
                             NLs::ChildrenCount(8)
                            });
 
@@ -1807,7 +1845,7 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
 
         TestDescribeResult(DescribePath(runtime, "/MyRoot/DirA"),
                            {NLs::Finished,
-                            NLs::PathVersionEqual(5),
+                            NLs::PathVersionEqual(6),
                             NLs::ChildrenCount(1)});
         TestDescribeResult(DescribePath(runtime, "/MyRoot/DirA/Table1"),
                            {NLs::Finished,
@@ -2067,11 +2105,22 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
               Columns { Name: "key18"   Type: "Uint64" }
               Columns { Name: "key19"   Type: "Uint64" }
               Columns { Name: "key20"   Type: "Uint64" }
+              Columns { Name: "key21"   Type: "Uint64" }
+              Columns { Name: "key22"   Type: "Uint64" }
+              Columns { Name: "key23"   Type: "Uint64" }
+              Columns { Name: "key24"   Type: "Uint64" }
+              Columns { Name: "key25"   Type: "Uint64" }
+              Columns { Name: "key26"   Type: "Uint64" }
+              Columns { Name: "key27"   Type: "Uint64" }
+              Columns { Name: "key28"   Type: "Uint64" }
+              Columns { Name: "key29"   Type: "Uint64" }
+              Columns { Name: "key30"   Type: "Uint64" }
 
               Columns { Name: "value0" Type: "Utf8" }
               Columns { Name: "value1" Type: "Utf8" }
               KeyColumnNames: ["key1", "key2", "key3", "key4", "key5", "key6", "key7", "key8", "key9", "key10",
-                               "key11", "key12", "key13", "key14", "key15", "key16", "key17", "key18", "key19", "key20"]
+                               "key11", "key12", "key13", "key14", "key15", "key16", "key17", "key18", "key19", "key20",
+                               "key21", "key22", "key23", "key24", "key25", "key26", "key27", "key28", "key29", "key30"]
             }
             IndexDescription {
               Name: "UserDefinedIndexByValue0"
@@ -2352,12 +2401,12 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
 
         TestDescribeResult(DescribePath(runtime, "/MyRoot"),
                            {NLs::Finished,
-                            NLs::PathVersionEqual(5),
+                            NLs::PathVersionEqual(6),
                             NLs::ChildrenCount(1)});
 
         auto dirAVersion = TestDescribeResult(DescribePath(runtime, "/MyRoot/DirA"),
                                               {NLs::Finished,
-                                               NLs::PathVersionEqual(5),
+                                               NLs::PathVersionEqual(6),
                                                NLs::ChildrenCount(1),
                                                NLs::ShardsInsideDomain(3)});
 
@@ -2366,7 +2415,7 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
 
         TestDescribeResult(DescribePath(runtime, "/MyRoot"),
                            {NLs::Finished,
-                            NLs::PathVersionEqual(7),
+                            NLs::PathVersionEqual(8),
                             NLs::ChildrenCount(0)});
 
         env.TestWaitTabletDeletion(runtime, xrange(TTestTxConfig::FakeHiveTablets, TTestTxConfig::FakeHiveTablets + 5));
@@ -2442,7 +2491,7 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
 
         auto dirAVersion = TestDescribeResult(DescribePath(runtime, "/MyRoot/DirA"),
                                               {NLs::Finished,
-                                               NLs::PathVersionEqual(5),
+                                               NLs::PathVersionEqual(6),
                                                NLs::ChildrenCount(1)});
 
         AsyncDropTable(runtime, ++txId, "/MyRoot/DirA", "Table1");
@@ -2800,11 +2849,11 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
                             NLs::NoChildren});
         TestDescribeResult(DescribePath(runtime, "/MyRoot/DirA"),
                            {NLs::Finished,
-                            NLs::PathVersionEqual(5),
+                            NLs::PathVersionEqual(6),
                             NLs::ChildrenCount(1)});
         TestDescribeResult(DescribePath(runtime, "/MyRoot/DirA/SubDirA"),
                            {NLs::Finished,
-                            NLs::PathVersionEqual(5),
+                            NLs::PathVersionEqual(6),
                             NLs::ChildrenCount(1)});
         TestDescribeResult(DescribePath(runtime, "/MyRoot/DirA/SubDirA/AAA"),
                            {NLs::Finished,
@@ -3597,6 +3646,35 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
             NLs::IsBackupTable(true),
         });
 
+        // cannot alter backup table
+        TestAlterTable(runtime, ++txId, "/MyRoot", R"(
+            Name: "CopyTable"
+            DropColumns { Name: "value" }
+        )", {NKikimrScheme::StatusSchemeError});
+
+        // cannot add cdc stream to backup table
+        TestCreateCdcStream(runtime, ++txId, "/MyRoot", R"(
+            TableName: "CopyTable"
+            StreamDescription {
+              Name: "Stream"
+              Mode: ECdcStreamModeKeysOnly
+              Format: ECdcStreamFormatProto
+            }
+        )", {NKikimrScheme::StatusSchemeError});
+
+        // cannot add sequence to backup table
+        TestCreateSequence(runtime, ++txId, "/MyRoot/CopyTable", R"(
+            Name: "Sequence"
+        )", {NKikimrScheme::StatusSchemeError});
+
+        // cannot add index to backup table
+        TestBuildIndex(runtime, ++txId, TTestTxConfig::SchemeShard, "/MyRoot", "/MyRoot/CopyTable", "Index", {"value"});
+        env.TestWaitNotification(runtime, txId);
+        {
+            auto desc = TestGetBuildIndex(runtime, TTestTxConfig::SchemeShard, "/MyRoot", txId);
+            UNIT_ASSERT_EQUAL(desc.GetIndexBuild().GetState(), Ydb::Table::IndexBuildState::STATE_REJECTED);
+        }
+
         // consistent copy table
         TestConsistentCopyTables(runtime, ++txId, "/", R"(
             CopyTableDescriptions {
@@ -3735,16 +3813,18 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
         )", {NKikimrScheme::StatusInvalidParameter});
 
         // cannot remove 'IsBackup' property from existent table
-        TestAlterTable(runtime, ++txId, "/MyRoot", R"(
+        AsyncSend(runtime, TTestTxConfig::SchemeShard, InternalTransaction(AlterTableRequest(++txId, "/MyRoot", R"(
             Name: "CopyTable"
             IsBackup: false
-        )", {NKikimrScheme::StatusInvalidParameter});
+        )")));
+        TestModificationResults(runtime, txId, {NKikimrScheme::StatusInvalidParameter});
 
-        TestAlterTable(runtime, ++txId, "/MyRoot", R"(
+        AsyncSend(runtime, TTestTxConfig::SchemeShard, InternalTransaction(AlterTableRequest(++txId, "/MyRoot", R"(
             Name: "CopyTable"
             IsBackup: false
             DropColumns { Name: "value" }
-        )", {NKikimrScheme::StatusInvalidParameter});
+        )")));
+        TestModificationResults(runtime, txId, {NKikimrScheme::StatusInvalidParameter});
 
         // sanity check
 
@@ -6331,6 +6411,7 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
                         "PartitionPerTablet: 10 "
                         "PQTabletConfig: {PartitionConfig { LifetimeSeconds : 10}}"
                         );
+        env.TestWaitNotification(runtime, txId);
 
         TestDescribeResult(DescribePath(runtime, "/MyRoot/DirA/PQGroup_1", true),
                            {NLs::CheckPartCount("PQGroup_1", 100, 10, 10, 100),
@@ -6558,6 +6639,42 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
         TestDescribeResult(DescribePath(runtime, "/MyRoot/PQGroup3", true), {
             NLs::CheckPartCount("PQGroup3", 2, 1, 2, 2),
         });
+
+        // pg type
+        TestCreatePQGroup(runtime, ++txId, "/MyRoot", R"(
+            Name: "PQGroup4"
+            TotalGroupCount: 2
+            PartitionPerTablet: 1
+            PQTabletConfig {
+                PartitionConfig { LifetimeSeconds: 10 }
+                PartitionKeySchema { Name: "key1" TypeId: 0x3000 TypeInfo { PgTypeId: 23 } }
+            }
+            PartitionBoundaries {
+                Tuple { Optional { Text: "1000" } }
+            }
+        )");
+        env.TestWaitNotification(runtime, txId);
+        TestDescribeResult(DescribePath(runtime, "/MyRoot/PQGroup4", true), {
+            NLs::CheckPartCount("PQGroup4", 2, 1, 2, 2),
+        });
+
+        // decimal type
+        TestCreatePQGroup(runtime, ++txId, "/MyRoot", R"(
+            Name: "PQGroup5"
+            TotalGroupCount: 2
+            PartitionPerTablet: 1
+            PQTabletConfig {
+                PartitionConfig { LifetimeSeconds: 10 }
+                PartitionKeySchema { Name: "key1" TypeId: 4865 TypeInfo { DecimalPrecision: 35 DecimalScale: 10 } }
+            }
+            PartitionBoundaries {
+                Tuple { Optional { Low128: 0 Hi128: 0 } }
+            }
+        )");
+        env.TestWaitNotification(runtime, txId);
+        TestDescribeResult(DescribePath(runtime, "/MyRoot/PQGroup5", true), {
+            NLs::CheckPartCount("PQGroup5", 2, 1, 2, 2),
+        });        
     }
 
     Y_UNIT_TEST(AlterPersQueueGroupWithKeySchema) {
@@ -6853,7 +6970,7 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
         AsyncForceDropUnsafe(runtime, ++txId, pVer.PathId.LocalPathId);
 
         TestModificationResult(runtime, txId-2, NKikimrScheme::StatusAccepted);
-        TestModificationResult(runtime, txId-1, NKikimrScheme::StatusAccepted);
+        TestModificationResults(runtime, txId-1, {NKikimrScheme::StatusAccepted, NKikimrScheme::StatusMultipleModifications});
         TestModificationResult(runtime, txId, NKikimrScheme::StatusAccepted);
 
         TActorId sender = runtime.AllocateEdgeActor();
@@ -9099,7 +9216,16 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
                                                       "PartitionCount: 40 ");
         env.TestWaitNotification(runtime, txId);
         TestDescribeResult(DescribePath(runtime, "/MyRoot/Solomon"),
-                           {NLs::Finished, NLs::PathsInsideDomain(1), NLs::ShardsInsideDomain(40)});
+                           {NLs::Finished, NLs::PathsInsideDomain(1), NLs::ShardsInsideDomain(40),
+                           [](const NKikimrScheme::TEvDescribeSchemeResult& result){
+                                const auto& desc = result.GetPathDescription().GetSolomonDescription();
+                                const auto& boundChannels = desc.GetBoundChannels();
+                                UNIT_ASSERT_VALUES_EQUAL(boundChannels.size(), 4);
+                                UNIT_ASSERT_VALUES_EQUAL(boundChannels[0].GetStoragePoolName(), "pool-1");
+                                UNIT_ASSERT_VALUES_EQUAL(boundChannels[1].GetStoragePoolName(), "pool-1");
+                                UNIT_ASSERT_VALUES_EQUAL(boundChannels[2].GetStoragePoolName(), "pool-1");
+                                UNIT_ASSERT_VALUES_EQUAL(boundChannels[3].GetStoragePoolName(), "pool-1");
+                           }});
 
         // Already exists
         TestCreateSolomon(runtime, ++txId, "/MyRoot", "Name: \"Solomon\" "
@@ -9200,7 +9326,16 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
         env.TestWaitNotification(runtime, txId);
 
         TestDescribeResult(DescribePath(runtime, "/MyRoot/Solomon"),
-                           {NLs::Finished, NLs::PathsInsideDomain(1), NLs::ShardsInsideDomain(4)});
+                           {NLs::Finished, NLs::PathsInsideDomain(1), NLs::ShardsInsideDomain(4),
+                           [](const NKikimrScheme::TEvDescribeSchemeResult& result){
+                                const auto& desc = result.GetPathDescription().GetSolomonDescription();
+                                const auto& boundChannels = desc.GetBoundChannels();
+                                UNIT_ASSERT_VALUES_EQUAL(boundChannels.size(), 4);
+                                UNIT_ASSERT_VALUES_EQUAL(boundChannels[0].GetStoragePoolName(), "pool-1");
+                                UNIT_ASSERT_VALUES_EQUAL(boundChannels[1].GetStoragePoolName(), "pool-1");
+                                UNIT_ASSERT_VALUES_EQUAL(boundChannels[2].GetStoragePoolName(), "pool-1");
+                                UNIT_ASSERT_VALUES_EQUAL(boundChannels[3].GetStoragePoolName(), "pool-1");
+                           }});
 
         TestDropSolomon(runtime, ++txId, "/MyRoot", "Solomon");
         env.TestWaitNotification(runtime, txId);
@@ -9311,6 +9446,134 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
 
     Y_UNIT_TEST(UpdateChannelsBindingSolomonShouldUpdate) {
         UpdateChannelsBindingSolomon(true);
+    }
+
+    void UpdateChannelsBindingSolomonStorageConfig() {
+        TTestBasicRuntime runtime;
+        TTestEnv env(runtime, TTestEnvOptions().AllowUpdateChannelsBindingOfSolomonPartitions(true));
+        ui64 txId = 100;
+
+        auto check = [&](const TString& path, ui64 shards, const THashMap<TString, ui32>& expectedChannels) {
+            NKikimrSchemeOp::TDescribeOptions opts;
+            opts.SetReturnChannelsBinding(true);
+
+            auto makeChannels = [](const auto& boundsChannels) {
+                THashMap<TString, ui32> channels;
+                for (const auto& channel : boundsChannels) {
+                    channels[channel.GetStoragePoolName()]++;
+                }
+                return channels;
+            };
+
+            TestDescribeResult(DescribePath(runtime, path, opts), {
+                NLs::Finished,
+                NLs::ShardsInsideDomain(shards),
+                [&expectedChannels, &makeChannels, &shards] (const NKikimrScheme::TEvDescribeSchemeResult& record) {
+                    const auto& desc = record.GetPathDescription().GetSolomonDescription();
+
+                    UNIT_ASSERT_VALUES_EQUAL(shards, desc.PartitionsSize());
+
+                    for (size_t i = 0; i < desc.PartitionsSize(); ++i) {
+                        const auto& partition = desc.GetPartitions(i);
+
+                        THashMap<TString, ui32> channels = makeChannels(partition.GetBoundChannels());
+                        UNIT_ASSERT_VALUES_EQUAL(expectedChannels.size(), channels.size());
+
+                        for (const auto& [name, count] : expectedChannels) {
+                            UNIT_ASSERT_C(channels.contains(name), "Cannot find channel: " << name);
+                            UNIT_ASSERT_VALUES_EQUAL(channels.at(name), count);
+                        }
+                    }
+
+                    THashMap<TString, ui32> volumeChannels = makeChannels(desc.GetBoundChannels());
+                    UNIT_ASSERT_VALUES_EQUAL(expectedChannels.size(), volumeChannels.size());
+
+                    for (const auto& [name, count] : expectedChannels) {
+                        UNIT_ASSERT_C(volumeChannels.contains(name), "Cannot find channel: " << name);
+                        UNIT_ASSERT_VALUES_EQUAL(volumeChannels.at(name), count);
+                    }
+                }
+            });
+        };
+
+        TestCreateSolomon(runtime, ++txId, "/MyRoot", R"(
+            Name: "Solomon"
+            PartitionCount: 1
+            StorageConfig {
+                Channel {
+                    PreferredPoolKind: "pool-kind-1"
+                }
+                Channel {
+                    PreferredPoolKind: "pool-kind-1"
+                }
+                Channel {
+                    PreferredPoolKind: "pool-kind-1"
+                }
+            }
+        )");
+
+        env.TestWaitNotification(runtime, txId);
+        check("/MyRoot/Solomon", 1, {{{"pool-1", 3}}});
+        // case 1: empty alter
+        TestAlterSolomon(runtime, ++txId, "/MyRoot", R"(
+            Name: "Solomon"
+            StorageConfig {
+                Channel {
+                    PreferredPoolKind: "pool-kind-2"
+                }
+                Channel {
+                    PreferredPoolKind: "pool-kind-2"
+                }
+                Channel {
+                    PreferredPoolKind: "pool-kind-2"
+                }
+            }
+        )", {NKikimrScheme::StatusInvalidParameter});
+
+        // case 2: add partition
+        TestAlterSolomon(runtime, ++txId, "/MyRoot", R"(
+            Name: "Solomon"
+            PartitionCount: 2    
+            StorageConfig {
+                Channel {
+                    PreferredPoolKind: "pool-kind-1"
+                }
+                Channel {
+                    PreferredPoolKind: "pool-kind-1"
+                }
+                Channel {
+                    PreferredPoolKind: "pool-kind-1"
+                }
+            }
+        )");
+
+        env.TestWaitNotification(runtime, txId);
+        check("/MyRoot/Solomon", 2, {{"pool-1", 3}});
+
+        // case 3: add partition & update channels binding
+        TestAlterSolomon(runtime, ++txId, "/MyRoot", R"(
+            Name: "Solomon"
+            PartitionCount: 3
+            UpdateChannelsBinding: true
+            StorageConfig {
+                Channel {
+                    PreferredPoolKind: "pool-kind-2"
+                }
+                Channel {
+                    PreferredPoolKind: "pool-kind-2"
+                }
+                Channel {
+                    PreferredPoolKind: "pool-kind-2"
+                }
+            }
+        )");
+
+        env.TestWaitNotification(runtime, txId);
+        check("/MyRoot/Solomon", 3, {{"pool-2", 3}});
+    }
+
+    Y_UNIT_TEST(UpdateChannelsBindingSolomonStorageConfig) {
+        UpdateChannelsBindingSolomonStorageConfig();
     }
 
     Y_UNIT_TEST(RejectAlterSolomon) { //+
@@ -10125,7 +10388,7 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
                                               }, 100);
             UNIT_ASSERT_VALUES_EQUAL(splitKey, "(Uint64 : 0, Utf8 : a, Uint32 : 1)");
         }
-        
+
         {
             TString splitKey =
                     schemaHelper.FindSplitKey({
@@ -10294,7 +10557,7 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
 
         TestDescribeResult(DescribePath(runtime, "/MyRoot/Dir"),
                            {NLs::NotFinished,
-                           NLs::PathVersionEqual(3),
+                           NLs::PathVersionEqual(4),
                            NLs::ChildrenCount(1)});
 
         TestDescribeResult(DescribePath(runtime, "/MyRoot/Dir/Table"),
@@ -10328,7 +10591,7 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
 
         TestDescribeResult(DescribePath(runtime, "/MyRoot/Dir"),
                            {NLs::Finished,
-                           NLs::PathVersionEqual(5),
+                           NLs::PathVersionEqual(6),
                            NLs::ChildrenCount(1)});
 
         TestDescribeResult(DescribePath(runtime, "/MyRoot/Dir/Table"),
@@ -11072,6 +11335,74 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
         AssertReserve("/MyRoot/Topic2", 3 * 17);
     }
 
+    Y_UNIT_TEST(TopicWithAutopartitioningReserveSize) {
+        TTestEnvOptions opts;
+        opts.EnableTopicSplitMerge(true);
+        opts.EnablePQConfigTransactionsAtSchemeShard(true);
+
+        TTestBasicRuntime runtime;
+
+        TTestEnv env(runtime, opts);
+        ui64 txId = 100;
+
+        const auto AssertReserve = [&] (TString path, ui64 expectedReservedStorage) {
+            TestDescribeResult(DescribePath(runtime, path),
+                               {NLs::Finished,
+                                NLs::TopicReservedStorage(expectedReservedStorage)});
+        };
+
+        // create with WriteSpeedInBytesPerSecond
+        TestCreatePQGroup(runtime, ++txId, "/MyRoot", R"(
+            Name: "Topic1"
+            TotalGroupCount: 1
+            PartitionPerTablet: 1
+            PQTabletConfig {
+                PartitionConfig {
+                    LifetimeSeconds: 13
+                    WriteSpeedInBytesPerSecond : 19
+                }
+                MeteringMode: METERING_MODE_RESERVED_CAPACITY
+                PartitionStrategy {
+                    MinPartitionCount: 1
+                    MaxPartitionCount: 7
+                    PartitionStrategyType: CAN_SPLIT_AND_MERGE
+                }
+            }
+        )");
+        env.TestWaitNotification(runtime, txId);
+        AssertReserve("/MyRoot/Topic1", 1 * 13 * 19);
+
+        TestAlterPQGroup(runtime, ++txId, "/MyRoot", R"(
+            Name: "Topic1"
+            Split {
+                Partition: 0
+                SplitBoundary: 'A'
+            }
+        )");
+        env.TestWaitNotification(runtime, txId);
+        AssertReserve("/MyRoot/Topic1", 2 * 13 * 19); // There are only 2 active partitions
+
+        TestAlterPQGroup(runtime, ++txId, "/MyRoot", R"(
+            Name: "Topic1"
+            Split {
+                Partition: 1
+                SplitBoundary: '0'
+            }
+        )");
+        env.TestWaitNotification(runtime, txId);
+        AssertReserve("/MyRoot/Topic1", 3 * 13 * 19); // There are only 3 active partitions
+
+        TestAlterPQGroup(runtime, ++txId, "/MyRoot", R"(
+            Name: "Topic1"
+            Merge {
+                Partition: 2
+                AdjacentPartition: 4
+            }
+        )");
+        env.TestWaitNotification(runtime, txId);
+        AssertReserve("/MyRoot/Topic1", 2 * 13 * 19); // There are only 2 active partitions
+    }
+
     Y_UNIT_TEST(FindSubDomainPathId) {
         TTestBasicRuntime runtime;
         TTestEnv env(runtime);
@@ -11234,4 +11565,223 @@ Y_UNIT_TEST_SUITE(TSchemeShardTest) {
         env.TestWaitNotification(runtime, txId);
     }
 
+    Y_UNIT_TEST(CreateSystemColumn) {
+        TTestBasicRuntime runtime;
+        TTestEnv env(runtime);
+        ui64 txId = 100;
+
+        TestCreateTable(runtime, ++txId, "/MyRoot", R"(
+            Name: "SystemColumnForbidden"
+            Columns { Name: "__ydb_SomeColumn"   Type: "Uint64" }
+            Columns { Name: "value" Type: "Uint64" }
+            KeyColumnNames: ["__ydb_SomeColumn", "value"]
+        )", {NKikimrScheme::StatusSchemeError});
+
+        TestCreateTable(runtime, ++txId, "/MyRoot", R"(
+            Name: "SystemColumnAllowed"
+            Columns { Name: "__ydb_SomeColumn"   Type: "Uint64" }
+            Columns { Name: "value" Type: "Uint64" }
+            KeyColumnNames: ["__ydb_SomeColumn", "value"]
+            SystemColumnNamesAllowed: true
+        )");
+
+        env.TestWaitNotification(runtime, txId);
+
+        TestCopyTable(runtime, ++txId, "/MyRoot", "SystemColumnInCopyAllowed", "/MyRoot/SystemColumnAllowed");
+    }
+
+    Y_UNIT_TEST_FLAG(BackupBackupCollection, WithIncremental) {
+        TTestBasicRuntime runtime;
+        TTestEnv env(runtime, TTestEnvOptions().EnableBackupService(true));
+        ui64 txId = 100;
+
+        auto defaultCollectionSettings = []() {
+            return TString(R"(
+                Name: "MyCollection1"
+                ExplicitEntryList {
+                    Entries {
+                        Type: ETypeTable
+                        Path: "/MyRoot/Table1"
+                    }
+                    Entries {
+                        Type: ETypeTable
+                        Path: "/MyRoot/DirA/Table2"
+                    }
+                    Entries {
+                        Type: ETypeTable
+                        Path: "/MyRoot/DirA/DirB/Table3"
+                    }
+                }
+                Cluster {}
+            )") + (WithIncremental ? TString("IncrementalBackupConfig {} \n") : TString());
+        };
+
+        AsyncMkDir(runtime, ++txId, "/MyRoot", "DirA");
+        AsyncMkDir(runtime, ++txId, "/MyRoot/DirA", "DirB");
+        AsyncCreateTable(runtime, ++txId, "/MyRoot", R"(
+              Name: "Table1"
+              Columns { Name: "key"   Type: "Uint64" }
+              Columns { Name: "value0" Type: "Utf8" }
+              KeyColumnNames: ["key"]
+        )");
+        AsyncCreateIndexedTable(runtime, ++txId, "/MyRoot/DirA", R"(
+            TableDescription {
+              Name: "Table2"
+              Columns { Name: "key"   Type: "Uint64" }
+              Columns { Name: "value0" Type: "Utf8" }
+              Columns { Name: "value1" Type: "Utf8" }
+              KeyColumnNames: ["key"]
+            }
+            IndexDescription {
+              Name: "UserDefinedIndexByValue0"
+              KeyColumnNames: ["value0"]
+            }
+            IndexDescription {
+              Name: "UserDefinedIndexByValues"
+              KeyColumnNames: ["value0", "value1"]
+            }
+            IndexDescription {
+              Name: "UserDefinedIndexByValue0CoveringValue1"
+              KeyColumnNames: ["value0"]
+              DataColumnNames: ["value1"]
+            }
+        )");
+        AsyncCreateTable(runtime, ++txId, "/MyRoot/DirA/DirB", R"(
+              Name: "Table3"
+              Columns { Name: "key"   Type: "Uint64" }
+              Columns { Name: "value0" Type: "Utf8" }
+              KeyColumnNames: ["key"]
+        )");
+
+        TestModificationResult(runtime, txId - 4, NKikimrScheme::StatusAccepted);
+        TestModificationResult(runtime, txId - 3, NKikimrScheme::StatusAccepted);
+        TestModificationResult(runtime, txId - 2, NKikimrScheme::StatusAccepted);
+        TestModificationResult(runtime, txId - 1, NKikimrScheme::StatusAccepted);
+        TestModificationResult(runtime, txId - 0, NKikimrScheme::StatusAccepted);
+
+        env.TestWaitNotification(runtime, {txId, txId - 1 , txId - 2, txId - 3, txId - 4});
+
+        TestMkDir(runtime, ++txId, "/MyRoot", ".backups/collections");
+        TestCreateBackupCollection(runtime, ++txId, "/MyRoot/.backups/collections", defaultCollectionSettings());
+
+        env.TestWaitNotification(runtime, {txId, txId - 1});
+
+        TestBackupBackupCollection(runtime, ++txId, "/MyRoot", R"(
+              Name: ".backups/collections/MyCollection1"
+        )");
+
+        env.TestWaitNotification(runtime, txId);
+
+        TestDescribeResult(DescribePath(runtime, "/MyRoot/.backups/collections/MyCollection1"), {
+            NLs::PathExist,
+            NLs::IsBackupCollection,
+            NLs::ChildrenCount(1),
+            NLs::Finished,
+        });
+
+        auto descr = DescribePath(runtime, "/MyRoot/.backups/collections/MyCollection1").GetPathDescription();
+        UNIT_ASSERT_VALUES_EQUAL(descr.GetChildren().size(), 1);
+
+        auto backupDirName = descr.GetChildren(0).GetName().c_str();
+
+        TestDescribeResult(DescribePath(runtime, Sprintf("/MyRoot/.backups/collections/MyCollection1/%s", backupDirName)), {
+            NLs::PathExist,
+            NLs::ChildrenCount(2),
+            NLs::Finished,
+        });
+
+        TestDescribeResult(DescribePath(runtime, Sprintf("/MyRoot/.backups/collections/MyCollection1/%s/Table1", backupDirName)), {
+            NLs::PathExist,
+            NLs::IsTable,
+            NLs::Finished,
+        });
+
+        TestDescribeResult(DescribePath(runtime, Sprintf("/MyRoot/.backups/collections/MyCollection1/%s/DirA", backupDirName)), {
+            NLs::PathExist,
+            NLs::ChildrenCount(2),
+            NLs::Finished,
+        });
+
+        TestDescribeResult(DescribePath(runtime, Sprintf("/MyRoot/.backups/collections/MyCollection1/%s/DirA/Table2", backupDirName)), {
+            NLs::PathExist,
+            NLs::IsTable,
+            NLs::Finished,
+        });
+
+        TestDescribeResult(DescribePath(runtime, Sprintf("/MyRoot/.backups/collections/MyCollection1/%s/DirA/DirB", backupDirName)), {
+            NLs::PathExist,
+            NLs::ChildrenCount(1),
+            NLs::Finished,
+        });
+
+        TestDescribeResult(DescribePath(runtime, Sprintf("/MyRoot/.backups/collections/MyCollection1/%s/DirA/DirB/Table3", backupDirName)), {
+            NLs::PathExist,
+            NLs::IsTable,
+            NLs::Finished,
+        });
+
+        // TODO: validate no index created
+        // TODO: validate no stream created
+
+        if (WithIncremental) {
+            TestBackupIncrementalBackupCollection(runtime, ++txId, "/MyRoot", R"(
+                Name: ".backups/collections/MyCollection1"
+            )");
+
+            env.TestWaitNotification(runtime, txId);
+
+            TestDescribeResult(DescribePath(runtime, "/MyRoot/.backups/collections/MyCollection1"), {
+                NLs::PathExist,
+                NLs::IsBackupCollection,
+                NLs::ChildrenCount(2),
+                NLs::Finished,
+            });
+
+            auto descr = DescribePath(runtime, "/MyRoot/.backups/collections/MyCollection1").GetPathDescription();
+            UNIT_ASSERT_VALUES_EQUAL(descr.GetChildren().size(), 2);
+
+            const char* incrBackupDirName = nullptr;
+            for (auto& dir : descr.GetChildren()) {
+                if (dir.GetName().EndsWith("_incremental")) {
+                    incrBackupDirName = dir.GetName().c_str();
+                }
+            }
+
+            TestDescribeResult(DescribePath(runtime, Sprintf("/MyRoot/.backups/collections/MyCollection1/%s", incrBackupDirName)), {
+                NLs::PathExist,
+                NLs::ChildrenCount(2),
+                NLs::Finished,
+            });
+
+            TestDescribeResult(DescribePath(runtime, Sprintf("/MyRoot/.backups/collections/MyCollection1/%s/Table1", incrBackupDirName)), {
+                NLs::PathExist,
+                NLs::IsTable,
+                NLs::Finished,
+            });
+
+            TestDescribeResult(DescribePath(runtime, Sprintf("/MyRoot/.backups/collections/MyCollection1/%s/DirA", incrBackupDirName)), {
+                NLs::PathExist,
+                NLs::ChildrenCount(2),
+                NLs::Finished,
+            });
+
+            TestDescribeResult(DescribePath(runtime, Sprintf("/MyRoot/.backups/collections/MyCollection1/%s/DirA/Table2", incrBackupDirName)), {
+                NLs::PathExist,
+                NLs::IsTable,
+                NLs::Finished,
+            });
+
+            TestDescribeResult(DescribePath(runtime, Sprintf("/MyRoot/.backups/collections/MyCollection1/%s/DirA/DirB", incrBackupDirName)), {
+                NLs::PathExist,
+                NLs::ChildrenCount(1),
+                NLs::Finished,
+            });
+
+            TestDescribeResult(DescribePath(runtime, Sprintf("/MyRoot/.backups/collections/MyCollection1/%s/DirA/DirB/Table3", incrBackupDirName)), {
+                NLs::PathExist,
+                NLs::IsTable,
+                NLs::Finished,
+            });
+        }
+    }
 }

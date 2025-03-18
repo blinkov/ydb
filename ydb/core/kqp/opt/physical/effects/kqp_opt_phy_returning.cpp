@@ -151,14 +151,30 @@ TExprBase KqpBuildReturning(TExprBase node, TExprContext& ctx, const TKqpOptimiz
                     .Index().Build("0")
                     .Build()
                 .Done();
+        } else if (NDq::IsDqPureExpr(input.Cast())) {
+            input = Build<TDqCnUnionAll>(ctx, pos)
+                .Output()
+                    .Stage<TDqStage>()
+                        .Inputs().Build()
+                        .Program()
+                            .Args({})
+                            .Body<TCoToFlow>()
+                                .Input(input.Cast())
+                                .Build()
+                            .Build()
+                        .Settings().Build()
+                    .Build()
+                    .Index().Build("0")
+                    .Build()
+                .Done();
         }
 
         auto inputExpr = Build<TCoExtractMembers>(ctx, pos)
             .Input(input.Cast())
             .Members(returning.Columns())
-            .Done().Ptr();
+            .Done();
 
-        return TExprBase(ctx.ChangeChild(*returning.Raw(), TKqlReturningList::idx_Update, std::move(inputExpr)));
+        return TExprBase(ctx.ChangeChild(*returning.Raw(), TKqlReturningList::idx_Update, inputExpr.Ptr()));
     };
 
     if (auto maybeList = returning.Update().Maybe<TExprList>()) {
@@ -173,6 +189,10 @@ TExprBase KqpBuildReturning(TExprBase node, TExprContext& ctx, const TKqpOptimiz
                     return buildReturningRows(del.Input().Cast(), MakeColumnsList(tableDesc.Metadata->KeyColumnNames, ctx, node.Pos()), returning.Columns());
                 }
             }
+
+            if (item.Maybe<TKqlTableEffect>()) {
+                return node;
+            }
         }
     }
 
@@ -181,6 +201,10 @@ TExprBase KqpBuildReturning(TExprBase node, TExprContext& ctx, const TKqpOptimiz
     }
     if (auto del = returning.Update().Maybe<TKqlDeleteRows>()) {
         return buildReturningRows(del.Input().Cast(), MakeColumnsList(tableDesc.Metadata->KeyColumnNames, ctx, node.Pos()), returning.Columns());
+    }
+
+    if (returning.Update().Maybe<TKqlTableEffect>()) {
+        return node;
     }
 
     TExprNode::TPtr result = returning.Update().Ptr();
@@ -204,7 +228,7 @@ TExprBase KqpRewriteReturningUpsert(TExprBase node, TExprContext& ctx, const TKq
         return node;
     }
 
-    if (!upsert.Input().Maybe<TDqPrecompute>() && !upsert.Input().Maybe<TDqPhyPrecompute>()) {
+    if (upsert.Input().Maybe<TDqPrecompute>() || upsert.Input().Maybe<TDqPhyPrecompute>()) {
         return node;
     }
 
@@ -215,8 +239,9 @@ TExprBase KqpRewriteReturningUpsert(TExprBase node, TExprContext& ctx, const TKq
                 .Build()
             .Table(upsert.Table())
             .Columns(upsert.Columns())
+            .IsBatch(upsert.IsBatch())
             .Settings(upsert.Settings())
-            .ReturningColumns<TCoAtomList>().Build()
+            .ReturningColumns(upsert.ReturningColumns())
             .Done();
 }
 
@@ -226,7 +251,7 @@ TExprBase KqpRewriteReturningDelete(TExprBase node, TExprContext& ctx, const TKq
         return node;
     }
 
-    if (!del.Input().Maybe<TDqPrecompute>() && !del.Input().Maybe<TDqPhyPrecompute>()) {
+    if (del.Input().Maybe<TDqPrecompute>() || del.Input().Maybe<TDqPhyPrecompute>()) {
         return node;
     }
 
@@ -236,7 +261,8 @@ TExprBase KqpRewriteReturningDelete(TExprBase node, TExprContext& ctx, const TKq
                 .Input(del.Input())
                 .Build()
             .Table(del.Table())
-            .ReturningColumns<TCoAtomList>().Build()
+            .IsBatch(del.IsBatch())
+            .ReturningColumns(del.ReturningColumns())
             .Done();
 }
 

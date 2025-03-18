@@ -79,7 +79,7 @@ class TopicReaderSync:
         Returns a future, which will complete when the reader has at least one message in queue.
         If the reader already has a message - the future will complete immediately.
 
-        A message may expire before it gets read so that the attempt to receive the massage will fail
+        A message may expire before it gets read so that the attempt to receive the message will fail
         despite the future has signaled about its availability.
         """
         self._check_closed()
@@ -103,7 +103,9 @@ class TopicReaderSync:
         self._check_closed()
 
         return self._caller.safe_call_with_result(
-            self._async_reader.receive_batch(),
+            self._async_reader.receive_batch(
+                max_messages=max_messages,
+            ),
             timeout,
         )
 

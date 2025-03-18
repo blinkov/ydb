@@ -34,7 +34,7 @@ Y_UNIT_TEST_SUITE(TDataShardTrace) {
         THolder<NKqp::TEvKqp::TEvQueryRequest> request = MakeSQLRequest(sql, true);
         runtime.Send(new IEventHandle(NKqp::MakeKqpProxyID(runtime.GetNodeId()), sender, request.Release(), 0, 0, nullptr, std::move(traceId)));
         auto ev = runtime.GrabEdgeEventRethrow<NKqp::TEvKqp::TEvQueryResponse>(sender);
-        UNIT_ASSERT_VALUES_EQUAL(ev->Get()->Record.GetRef().GetYdbStatus(), code);
+        UNIT_ASSERT_VALUES_EQUAL(ev->Get()->Record.GetYdbStatus(), code);
     }
 
     void SplitTable(TTestActorRuntime &runtime, Tests::TServer::TPtr server, ui64 splitKey) {
@@ -359,6 +359,7 @@ Y_UNIT_TEST_SUITE(TDataShardTrace) {
                         Repeat(
                             ExpectedSpan("Datashard.Read",
                                 ExpectedSpan("Tablet.Transaction",
+                                    ExpectedSpan("Tablet.Transaction.Enqueued"),
                                     ExpectedSpan("Tablet.Transaction.Execute",
                                         Repeat("Datashard.Unit", 3)),
                                     // No extra page fault with btree index (root is in meta)
@@ -371,7 +372,6 @@ Y_UNIT_TEST_SUITE(TDataShardTrace) {
                                     "Tablet.Transaction.Enqueued",
                                     ExpectedSpan("Tablet.Transaction.Execute",
                                         Repeat("Datashard.Unit", 2)),
-                                    ExpectedSpan("Tablet.WriteLog", "Tablet.WriteLog.LogEntry"),
                                     "Tablet.Transaction.Complete"),
                                 "Datashard.SendWithConfirmedReadOnlyLease"),
                             2))),
@@ -418,6 +418,9 @@ Y_UNIT_TEST_SUITE(TDataShardTrace) {
             std::move(traceId)
         );
 
+        // A small delay so the full trace is flushed
+        runtime.SimulateSleep(TDuration::MilliSeconds(1));
+
         UNIT_ASSERT(uploader->BuildTraceTrees());
         UNIT_ASSERT_VALUES_EQUAL(1, uploader->Traces.size());
 
@@ -441,9 +444,9 @@ Y_UNIT_TEST_SUITE(TDataShardTrace) {
                         Repeat(
                             ExpectedSpan("Datashard.Read",
                                 ExpectedSpan("Tablet.Transaction",
+                                    ExpectedSpan("Tablet.Transaction.Enqueued"),
                                     ExpectedSpan("Tablet.Transaction.Execute",
                                         Repeat("Datashard.Unit", 4)),
-                                    ExpectedSpan("Tablet.WriteLog", "Tablet.WriteLog.LogEntry"),
                                     "Tablet.Transaction.Complete"),
                                 "Datashard.SendWithConfirmedReadOnlyLease"),
                             2))),

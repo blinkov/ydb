@@ -53,7 +53,7 @@ TExecutorBootLogic::~TExecutorBootLogic()
     Y_ABORT_UNLESS(Steps->Alone(), "Bootlogic is still has pending IStep()s");
 }
 
-void TExecutorBootLogic::Describe(IOutputStream &out) const noexcept
+void TExecutorBootLogic::Describe(IOutputStream &out) const
 {
     return Steps->Describe(out);
 }
@@ -118,11 +118,11 @@ TExecutorBootLogic::EOpResult TExecutorBootLogic::ReceiveBoot(
     return CheckCompletion();
 }
 
-void TExecutorBootLogic::PrepareEnv(bool follower, ui32 gen, TExecutorCaches caches) noexcept
+void TExecutorBootLogic::PrepareEnv(bool follower, ui32 gen, TExecutorCaches caches)
 {
     BootTimestamp = AppData()->MonotonicTimeProvider->Now();
 
-    auto *sys = TlsActivationContext->ExecutorThread.ActorSystem;
+    auto *sys = TActivationContext::ActorSystem();
     auto *logger = new NUtil::TLogger(sys, NKikimrServices::TABLET_FLATBOOT);
 
     LoadBlobQueue.Config.TabletID = Info->TabletID;
@@ -181,7 +181,7 @@ NBoot::TSpawned TExecutorBootLogic::LoadPages(NBoot::IStep *step, TAutoPtr<NPage
     Y_ABORT_UNLESS(success, "IPageCollection queued twice for loading");
 
     Ops->Send(
-        MakeSharedPageCacheId(),
+        NSharedCache::MakeSharedPageCacheId(),
         new NSharedCache::TEvRequest(
             NBlockIO::EPriority::Fast,
             req,
@@ -301,7 +301,7 @@ TExecutorBootLogic::EOpResult TExecutorBootLogic::Receive(::NActors::IEventHandl
     return CheckCompletion();
 }
 
-TAutoPtr<NBoot::TResult> TExecutorBootLogic::ExtractState() noexcept {
+TAutoPtr<NBoot::TResult> TExecutorBootLogic::ExtractState() {
     Y_ABORT_UNLESS(Result_->Database, "Looks like booting hasn't been done");
     return Result_;
 }

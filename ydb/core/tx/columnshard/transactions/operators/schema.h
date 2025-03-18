@@ -7,7 +7,7 @@
 
 namespace NKikimr::NColumnShard {
 
-class TSchemaTransactionOperator: public IProposeTxOperator {
+class TSchemaTransactionOperator: public IProposeTxOperator, public TMonitoringObjectsCounter<TSchemaTransactionOperator> {
 private:
     using TBase = IProposeTxOperator;
 
@@ -18,13 +18,12 @@ private:
     THashSet<TActorId> NotifySubscribers;
     THashSet<ui64> WaitPathIdsToErase;
 
-    virtual bool DoOnStartAsync(TColumnShard& owner) override;
+    virtual void DoOnTabletInit(TColumnShard& owner) override;
 
     template <class TInfoProto>
     THashSet<ui64> GetNotErasedTableIds(const TColumnShard& owner, const TInfoProto& tables) const {
         THashSet<ui64> result;
         for (auto&& i : tables) {
-            AFL_VERIFY(!owner.TablesManager.HasTable(i.GetPathId()));
             if (owner.TablesManager.HasTable(i.GetPathId(), true)) {
                 result.emplace(i.GetPathId());
             }
@@ -42,6 +41,22 @@ private:
     virtual void DoFinishProposeOnExecute(TColumnShard& /*owner*/, NTabletFlatExecutor::TTransactionContext& /*txc*/) override {
     }
     virtual void DoFinishProposeOnComplete(TColumnShard& /*owner*/, const TActorContext& /*ctx*/) override {
+    }
+    virtual TString DoGetOpType() const override {
+        switch (SchemaTxBody.TxBody_case()) {
+            case NKikimrTxColumnShard::TSchemaTxBody::kInitShard:
+                return "Scheme:InitShard";
+            case NKikimrTxColumnShard::TSchemaTxBody::kEnsureTables:
+                return "Scheme:EnsureTables";
+            case NKikimrTxColumnShard::TSchemaTxBody::kAlterTable:
+                return "Scheme:AlterTable";
+            case NKikimrTxColumnShard::TSchemaTxBody::kAlterStore:
+                return "Scheme:AlterStore";
+            case NKikimrTxColumnShard::TSchemaTxBody::kDropTable:
+                return "Scheme:DropTable";
+            case NKikimrTxColumnShard::TSchemaTxBody::TXBODY_NOT_SET:
+                return "Scheme:TXBODY_NOT_SET";
+        }
     }
     virtual bool DoIsAsync() const override {
         return WaitPathIdsToErase.size();
@@ -65,7 +80,8 @@ private:
 public:
     using TBase::TBase;
 
-    virtual bool ExecuteOnProgress(TColumnShard& owner, const NOlap::TSnapshot& version, NTabletFlatExecutor::TTransactionContext& txc) override {
+    virtual bool ProgressOnExecute(
+        TColumnShard& owner, const NOlap::TSnapshot& version, NTabletFlatExecutor::TTransactionContext& txc) override {
         if (!!TxAddSharding) {
             auto* tx = dynamic_cast<TTxAddShardingInfo*>(TxAddSharding.get());
             AFL_VERIFY(tx);
@@ -79,7 +95,7 @@ public:
         return true;
     }
 
-    virtual bool CompleteOnProgress(TColumnShard& owner, const TActorContext& ctx) override {
+    virtual bool ProgressOnComplete(TColumnShard& owner, const TActorContext& ctx) override {
         if (!!TxAddSharding) {
             TxAddSharding->Complete(ctx);
         }
@@ -88,9 +104,6 @@ public:
             ctx.Send(subscriber, event.Release(), 0, 0);
         }
 
-        auto result = std::make_unique<TEvColumnShard::TEvProposeTransactionResult>(owner.TabletID(), TxInfo.TxKind, TxInfo.TxId, NKikimrTxColumnShard::SUCCESS);
-        result->Record.SetStep(TxInfo.PlanStep);
-        ctx.Send(TxInfo.Source, result.release(), 0, TxInfo.Cookie);
         return true;
     }
 

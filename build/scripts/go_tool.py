@@ -13,6 +13,9 @@ import traceback
 from contextlib import contextmanager
 from functools import reduce
 
+# Explicitly enable local imports
+# Don't forget to add imported scripts to inputs of the calling command!
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import process_command_files as pcf
 import process_whole_archive_option as pwa
 
@@ -75,15 +78,24 @@ def preprocess_args(args):
     args.output_root = os.path.normpath(args.output_root)
     args.import_map = {}
     args.module_map = {}
+
+    def is_valid_cgo_peer(peer):
+        if peer.endswith('.fake.pkg') or peer.endswith('.fake'):
+            return False
+        return True
+
     if args.cgo_peers:
-        args.cgo_peers = [x for x in args.cgo_peers if not x.endswith('.fake.pkg')]
+        args.cgo_peers = list(filter(is_valid_cgo_peer, args.cgo_peers))
 
     srcs = []
     for f in args.srcs:
         if f.endswith('.gosrc'):
             with tarfile.open(f, 'r') as tar:
                 srcs.extend(os.path.join(args.output_root, src) for src in tar.getnames())
-                tar.extractall(path=args.output_root)
+                if sys.version_info >= (3, 12):
+                    tar.extractall(path=args.output_root, filter='data')
+                else:
+                    tar.extractall(path=args.output_root)
         else:
             srcs.append(f)
     args.srcs = srcs
@@ -271,6 +283,7 @@ def gen_vet_info(args):
         'Compiler': 'gc',
         'Dir': os.path.join(args.source_root, get_source_path(args)),
         'ImportPath': import_path,
+        'GoVersion': ('go%s' % args.goversion),
         'GoFiles': [x for x in args.go_srcs if x.endswith('.go')],
         'NonGoFiles': [x for x in args.go_srcs if not x.endswith('.go')],
         'ImportMap': import_map,
@@ -497,9 +510,14 @@ def do_link_exe(args):
     if args.buildmode:
         cmd.append('-buildmode={}'.format(args.buildmode))
     elif args.mode in ('exe', 'test'):
-        cmd.append('-buildmode=exe')
+        mode = '-buildmode=exe'
         if 'ld.lld' in str(args):
-            extldflags.append('-Wl,-no-pie')
+            if '-fPIE' in str(args) or '-fPIC' in str(args):
+                # support explicit PIE
+                mode = '-buildmode=pie'
+            else:
+                extldflags.append('-Wl,-no-pie')
+        cmd.append(mode)
     elif args.mode == 'dll':
         cmd.append('-buildmode=c-shared')
     else:
@@ -507,12 +525,7 @@ def do_link_exe(args):
     cmd.append('-extld={}'.format(args.extld))
 
     if args.extldflags is not None:
-        filter_musl = bool
-        if args.musl:
-            cmd.append('-linkmode=external')
-            extldflags.append('-static')
-            filter_musl = lambda x: x not in ('-lc', '-ldl', '-lm', '-lpthread', '-lrt')
-        extldflags += [x for x in args.extldflags if filter_musl(x)]
+        extldflags.extend(args.extldflags)
     cgo_peers = []
     if args.cgo_peers is not None and len(args.cgo_peers) > 0:
         is_group = args.targ_os == 'linux'
@@ -527,6 +540,10 @@ def do_link_exe(args):
     except ValueError:
         extldflags.extend(cgo_peers)
     if len(extldflags) > 0:
+        for p in args.ld_plugins:
+            res = subprocess.check_output([sys.executable, p, sys.argv[0]] + extldflags, cwd=args.build_root).decode().strip()
+            if res:
+                extldflags = json.loads(res)[1:]
         cmd.append('-extldflags={}'.format(' '.join(extldflags)))
     cmd.append(compile_args.output)
     call(cmd, args.build_root)
@@ -832,6 +849,7 @@ if __name__ == '__main__':
     parser.add_argument('++test_srcs', nargs='*')
     parser.add_argument('++xtest_srcs', nargs='*')
     parser.add_argument('++cover_info', nargs='*')
+    parser.add_argument('++ld_plugins', nargs='*')
     parser.add_argument('++output', nargs='?', default=None)
     parser.add_argument('++source-root', default=None)
     parser.add_argument('++build-root', required=True)
@@ -863,7 +881,6 @@ if __name__ == '__main__':
     parser.add_argument('++vet-flags', nargs='*', default=None)
     parser.add_argument('++vet-info-ext', default=vet_info_ext)
     parser.add_argument('++vet-report-ext', default=vet_report_ext)
-    parser.add_argument('++musl', action='store_true')
     parser.add_argument('++skip-tests', nargs='*', default=None)
     parser.add_argument('++ydx-file', default='')
     parser.add_argument('++debug-root-map', default=None)

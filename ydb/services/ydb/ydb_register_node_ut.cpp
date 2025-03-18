@@ -6,7 +6,6 @@
 
 #include <ydb/core/base/storage_pools.h>
 #include <ydb/core/base/location.h>
-#include <ydb/core/protos/flat_scheme_op.pb.h>
 #include <ydb/core/scheme/scheme_tablecell.h>
 #include <ydb/core/testlib/test_client.h>
 #include <ydb/core/driver_lib/cli_config_base/config_base.h>
@@ -19,20 +18,20 @@
 #include <ydb/public/api/grpc/draft/dummy.grpc.pb.h>
 #include <ydb/public/api/protos/ydb_table.pb.h>
 
-#include <ydb/library/grpc/client/grpc_client_low.h>
+#include <ydb/public/sdk/cpp/src/library/grpc/client/grpc_client_low.h>
 
 #include <google/protobuf/any.h>
 
-#include <ydb/library/yql/core/issue/yql_issue.h>
-#include <ydb/library/yql/public/issue/yql_issue.h>
-#include <ydb/library/yql/public/issue/yql_issue_message.h>
+#include <yql/essentials/core/issue/yql_issue.h>
+#include <yql/essentials/public/issue/yql_issue.h>
+#include <yql/essentials/public/issue/yql_issue_message.h>
 
-#include <ydb/public/sdk/cpp/client/ydb_params/params.h>
-#include <ydb/public/sdk/cpp/client/ydb_result/result.h>
-#include <ydb/public/sdk/cpp/client/ydb_scheme/scheme.h>
-#include <ydb/public/sdk/cpp/client/ydb_table/table.h>
-#include <ydb/public/sdk/cpp/client/ydb_discovery/discovery.h>
-#include <ydb/public/sdk/cpp/client/resources/ydb_resources.h>
+#include <ydb/public/sdk/cpp/include/ydb-cpp-sdk/client/params/params.h>
+#include <ydb/public/sdk/cpp/include/ydb-cpp-sdk/client/result/result.h>
+#include <ydb/public/sdk/cpp/include/ydb-cpp-sdk/client/scheme/scheme.h>
+#include <ydb/public/sdk/cpp/include/ydb-cpp-sdk/client/table/table.h>
+#include <ydb/public/sdk/cpp/include/ydb-cpp-sdk/client/discovery/discovery.h>
+#include <ydb/public/sdk/cpp/include/ydb-cpp-sdk/client/resources/ydb_resources.h>
 
 #include <ydb/public/lib/deprecated/kicli/kicli.h>
 
@@ -54,6 +53,7 @@ struct TKikimrServerForTestNodeRegistration : TBasicKikimrWithGrpcAndRootSchema<
 
     struct TServerInitialization {
         bool EnforceUserToken = false;
+        bool EnforceCheckUserToken = false; // Takes effect when EnforceUserToken = false
         bool EnableDynamicNodeAuth = false;
         bool EnableWrongIdentity = false;
         bool SetNodeAuthValues = false;
@@ -71,6 +71,9 @@ private:
         auto& securityConfig = *config.MutableDomainsConfig()->MutableSecurityConfig();
         if (serverInitialization.EnforceUserToken) {
             securityConfig.SetEnforceUserTokenRequirement(true);
+        }
+        if (serverInitialization.EnforceCheckUserToken) {
+            securityConfig.SetEnforceUserTokenCheckRequirement(true);
         }
         if (serverInitialization.EnableDynamicNodeAuth) {
             config.MutableClientCertificateAuthorization()->SetRequestClientCertificate(true);
@@ -882,6 +885,47 @@ Y_UNIT_TEST(ServerWithoutCertVerification_ClientDoesNotProvideClientCerts) {
         CheckGood(RegisterNode(config.SetAuthToken(BUILTIN_ACL_ROOT)));
         CheckGood(RegisterNode(config.SetAuthToken("wrong_token")));
     }
+}
+
+Y_UNIT_TEST(ServerWithCertVerification_AuthNotRequired) {
+    // Scenario when we want to turn on secure node registration, but to check it in safe way
+    const TCertAndKey& caCert = TKikimrTestWithServerCert::GetCACertAndKey();
+    TProps props = TProps::AsClientServer();
+    const TCertAndKey clientServerCert = GenerateSignedCert(caCert, props);
+
+    props.Organization = "Enemy Org";
+    const TCertAndKey clientServerEnemyCert = GenerateSignedCert(caCert, props);
+
+    TKikimrServerForTestNodeRegistration server({
+        .EnforceUserToken = false, // still allow not secure way
+        .EnforceCheckUserToken = true, // when attempt to register with cert arrives, check it as if EnforceUserToken was switched on
+        .EnableDynamicNodeAuth = true,
+        .SetNodeAuthValues = true,
+        .RegisterNodeAllowedSids = {"DefaultClientAuth@cert"}
+    });
+    ui16 grpc = server.GetPort();
+    TString location = TStringBuilder() << "localhost:" << grpc;
+
+    SetLogPriority(server);
+
+    TDriverConfig secureConnectionConfig;
+    secureConnectionConfig.UseSecureConnection(caCert.Certificate.c_str())
+        .UseClientCertificate(clientServerCert.Certificate.c_str(),clientServerCert.PrivateKey.c_str())
+        .SetEndpoint(location);
+
+    TDriverConfig insecureConnectionConfig;
+    insecureConnectionConfig.UseSecureConnection(caCert.Certificate.c_str())
+        .SetEndpoint(location);
+
+    TDriverConfig enemyConnectionConfig;
+    enemyConnectionConfig.UseSecureConnection(caCert.Certificate.c_str())
+        .UseClientCertificate(clientServerEnemyCert.Certificate.c_str(),clientServerEnemyCert.PrivateKey.c_str())
+        .SetEndpoint(location);
+
+    CheckGood(RegisterNode(secureConnectionConfig));
+    CheckGood(RegisterNode(insecureConnectionConfig)); // without token and cert // EnforceUserToken = false
+    CheckAccessDenied(RegisterNode(insecureConnectionConfig.SetAuthToken("invalid token")), "Unknown token");
+    CheckAccessDeniedRegisterNode(RegisterNode(enemyConnectionConfig), "Client certificate failed verification");
 }
 
 }

@@ -1,23 +1,24 @@
 #pragma once
 
-#include "actorsystem.h"
 #include "event.h"
-#include "executor_thread.h"
+#include "mailbox.h"
 #include "monotonic.h"
-#include "thread_context.h"
 
 #include <ydb/library/actors/actor_type/indexes.h>
+#include <ydb/library/actors/util/datetime.h>
 #include <ydb/library/actors/util/local_process_key.h>
 
 #include <util/system/tls.h>
 #include <util/generic/noncopyable.h>
 
+#include <library/cpp/containers/absl_flat_hash/flat_hash_set.h>
+
 namespace NActors {
     class TActorSystem;
     class TMailboxTable;
-    struct TMailboxHeader;
+    class TMailbox;
 
-    class TGenericExecutorThread;
+    class TExecutorThread;
     class IActor;
     class ISchedulerCookie;
     class IExecutorPool;
@@ -44,12 +45,12 @@ namespace NActors {
 
     struct TActivationContext {
     public:
-        TMailboxHeader& Mailbox;
-        TGenericExecutorThread& ExecutorThread;
+        TMailbox& Mailbox;
+        TExecutorThread& ExecutorThread;
         const NHPTimer::STime EventStart;
 
     protected:
-        explicit TActivationContext(TMailboxHeader& mailbox, TGenericExecutorThread& executorThread, NHPTimer::STime eventStart)
+        explicit TActivationContext(TMailbox& mailbox, TExecutorThread& executorThread, NHPTimer::STime eventStart)
             : Mailbox(mailbox)
             , ExecutorThread(executorThread)
             , EventStart(eventStart)
@@ -130,12 +131,19 @@ namespace NActors {
 
         static i64 GetCurrentEventTicks();
         static double GetCurrentEventTicksAsSeconds();
+
+        static void EnableMailboxStats();
+
+        static ui32 GetOverwrittenEventsPerMailbox();
+        static void SetOverwrittenEventsPerMailbox(ui32 value);
+        static ui64 GetOverwrittenTimePerMailboxTs();
+        static void SetOverwrittenTimePerMailboxTs(ui64 value);
     };
 
     struct TActorContext: public TActivationContext {
         const TActorId SelfID;
         using TEventFlags = IEventHandle::TEventFlags;
-        explicit TActorContext(TMailboxHeader& mailbox, TGenericExecutorThread& executorThread, NHPTimer::STime eventStart, const TActorId& selfID)
+        explicit TActorContext(TMailbox& mailbox, TExecutorThread& executorThread, NHPTimer::STime eventStart, const TActorId& selfID)
             : TActivationContext(mailbox, executorThread, eventStart)
             , SelfID(selfID)
         {
@@ -237,7 +245,7 @@ namespace NActors {
 
     class IActorOps : TNonCopyable {
     public:
-        virtual void Describe(IOutputStream&) const noexcept = 0;
+        virtual void Describe(IOutputStream&) const = 0;
         virtual bool Send(const TActorId& recipient, IEventBase*, IEventHandle::TEventFlags flags = 0, ui64 cookie = 0, NWilson::TTraceId traceId = {}) const noexcept = 0;
 
         /**
@@ -269,15 +277,12 @@ namespace NActors {
 
         virtual TActorId Register(IActor*, TMailboxType::EType mailboxType = TMailboxType::HTSwap, ui32 poolId = Max<ui32>()) const noexcept = 0;
         virtual TActorId RegisterWithSameMailbox(IActor*) const noexcept = 0;
+
+        virtual TActorId RegisterAlias() noexcept = 0;
+        virtual void UnregisterAlias(const TActorId& actorId) noexcept = 0;
     };
 
     class TDecorator;
-
-    class TActorVirtualBehaviour {
-    public:
-        static void Receive(IActor* actor, std::unique_ptr<IEventHandle> ev);
-    public:
-    };
 
     class TActorCallbackBehaviour {
     private:
@@ -342,6 +347,23 @@ namespace NActors {
         void DoActorInit() { LastUsageTimestamp = GetCycleCountFast(); }
     };
 
+    /**
+     * Optional interface for actors with exception handling
+     */
+    class IActorExceptionHandler {
+    protected:
+        ~IActorExceptionHandler() = default;
+
+    public:
+        /**
+         * Called when actor's event handler throws an std::exception subclass
+         *
+         * The implementation is supposed to return true for handled exceptions
+         * and false to rethrow (which will likely result in a process crash).
+         */
+        virtual bool OnUnhandledException(const std::exception&) = 0;
+    };
+
     class IActor
         : protected IActorOps
         , public TActorUsageImpl<ActorLibCollectUsageStats>
@@ -352,24 +374,25 @@ namespace NActors {
         friend void DoActorInit(TActorSystem*, IActor*, const TActorId&, const TActorId&);
         friend class TDecorator;
 
+    private:
+        // actor aliases
+        absl::flat_hash_set<ui64> Aliases;
+        friend class TMailbox;
+
     private: // stuck actor monitoring
         TMonotonic LastReceiveTimestamp;
         size_t StuckIndex = Max<size_t>();
         friend class TExecutorPoolBaseMailboxed;
-        friend class TGenericExecutorThread;
+        friend class TExecutorThread;
 
-        IActor(const ui32 activityType)
-            : SelfActorId(TActorId())
-            , ElapsedTicks(0)
-            , ActivityType(activityType)
-            , HandledEvents(0) {
-        }
+    public:
+        using TReceiveFunc = void (IActor::*)(TAutoPtr<IEventHandle>& ev);
 
-    protected:
-        TActorCallbackBehaviour CImpl;
+    private:
+        TReceiveFunc StateFunc_;
+
     public:
         using TEventFlags = IEventHandle::TEventFlags;
-        using TReceiveFunc = TActorCallbackBehaviour::TReceiveFunc;
         /// @sa services.proto NKikimrServices::TActivity::EType
         using EActorActivity = EInternalActorType;
         using EActivityType = EActorActivity;
@@ -378,23 +401,39 @@ namespace NActors {
     protected:
         ui64 HandledEvents;
 
-        template <typename EEnum = EActivityType, typename std::enable_if<std::is_enum<EEnum>::value, bool>::type v = true>
-        IActor(const EEnum activityEnumType = EActivityType::OTHER)
-            : IActor(TEnumProcessKey<TActorActivityTag, EEnum>::GetIndex(activityEnumType)) {
-        }
-
-        IActor(TActorCallbackBehaviour&& cImpl, const ui32 activityType)
+        IActor(TReceiveFunc stateFunc, const ui32 activityType)
             : SelfActorId(TActorId())
             , ElapsedTicks(0)
-            , CImpl(std::move(cImpl))
+            , StateFunc_(stateFunc)
             , ActivityType(activityType)
             , HandledEvents(0)
         {
         }
 
         template <typename EEnum = EActivityType, typename std::enable_if<std::is_enum<EEnum>::value, bool>::type v = true>
-        IActor(TActorCallbackBehaviour&& cImpl, const EEnum activityEnumType = EActivityType::OTHER)
-            : IActor(std::move(cImpl), TEnumProcessKey<TActorActivityTag, EEnum>::GetIndex(activityEnumType)) {
+        IActor(TReceiveFunc stateFunc, const EEnum activityEnumType = EActivityType::OTHER)
+            : IActor(stateFunc, TEnumProcessKey<TActorActivityTag, EEnum>::GetIndex(activityEnumType)) {
+        }
+
+        template <typename T>
+        void Become(T stateFunc) {
+            StateFunc_ = static_cast<TReceiveFunc>(stateFunc);
+        }
+
+        template <typename T, typename... TArgs>
+        void Become(T stateFunc, TArgs&&... args) {
+            StateFunc_ = static_cast<TReceiveFunc>(stateFunc);
+            Schedule(std::forward<TArgs>(args)...);
+        }
+
+        template <typename T, typename... TArgs>
+        void Become(T stateFunc, const TActorContext& ctx, TArgs&&... args) {
+            StateFunc_ = static_cast<TReceiveFunc>(stateFunc);
+            ctx.Schedule(std::forward<TArgs>(args)...);
+        }
+
+        TReceiveFunc CurrentStateFunc() const {
+            return StateFunc_;
         }
 
     public:
@@ -525,15 +564,7 @@ namespace NActors {
             return SelfActorId;
         }
 
-        void Receive(TAutoPtr<IEventHandle>& ev) {
-            ++HandledEvents;
-            LastReceiveTimestamp = TActivationContext::Monotonic();
-            if (CImpl.Initialized()) {
-                CImpl.Receive(this, ev);
-            } else {
-                TActorVirtualBehaviour::Receive(this, std::unique_ptr<IEventHandle>(ev.Release()));
-            }
-        }
+        void Receive(TAutoPtr<IEventHandle>& ev);
 
         TActorContext ActorContext() const {
             return TActivationContext::ActorContextFor(SelfId());
@@ -542,7 +573,7 @@ namespace NActors {
     protected:
         void SetEnoughCpu(bool isEnough);
 
-        void Describe(IOutputStream&) const noexcept override;
+        void Describe(IOutputStream&) const override;
         bool Send(TAutoPtr<IEventHandle> ev) const noexcept;
         bool Send(const TActorId& recipient, IEventBase* ev, TEventFlags flags = 0, ui64 cookie = 0, NWilson::TTraceId traceId = {}) const noexcept final;
         bool Send(const TActorId& recipient, THolder<IEventBase> ev, TEventFlags flags = 0, ui64 cookie = 0, NWilson::TTraceId traceId = {}) const{
@@ -599,6 +630,9 @@ namespace NActors {
         // some memory.
         TActorId RegisterWithSameMailbox(IActor* actor) const noexcept final;
 
+        TActorId RegisterAlias() noexcept final;
+        void UnregisterAlias(const TActorId& actorId) noexcept final;
+
         std::pair<ui32, ui32> CountMailboxEvents(ui32 maxTraverse = Max<ui32>()) const;
 
     private:
@@ -615,43 +649,11 @@ namespace NActors {
         return TLocalProcessKeyState<TActorActivityTag>::GetInstance().GetNameByIndex(index);
     }
 
-    class IActorCallback: public IActor {
-    protected:
-        template <class TEnum = IActor::EActivityType>
-        IActorCallback(TReceiveFunc stateFunc, const TEnum activityType = IActor::EActivityType::OTHER)
-            : IActor(TActorCallbackBehaviour(stateFunc), activityType) {
-
-        }
-
-        IActorCallback(TReceiveFunc stateFunc, const ui32 activityType)
-            : IActor(TActorCallbackBehaviour(stateFunc), activityType) {
-
-        }
-
-    public:
-        template <typename T>
-        void Become(T stateFunc) {
-            CImpl.Become(stateFunc);
-        }
-
-        template <typename T, typename... TArgs>
-        void Become(T stateFunc, const TActorContext& ctx, TArgs&&... args) {
-            CImpl.Become(stateFunc, ctx, std::forward<TArgs>(args)...);
-        }
-
-        template <typename T, typename... TArgs>
-        void Become(T stateFunc, TArgs&&... args) {
-            CImpl.Become(stateFunc);
-            Schedule(std::forward<TArgs>(args)...);
-        }
-
-        TReceiveFunc CurrentStateFunc() const {
-            return CImpl.CurrentStateFunc();
-        }
-    };
+    // For compatibility with existing code
+    using IActorCallback = IActor;
 
     template <typename TDerived>
-    class TActor: public IActorCallback {
+    class TActor: public IActor {
     private:
         using TDerivedReceiveFunc = void (TDerived::*)(TAutoPtr<IEventHandle>& ev);
 
@@ -705,36 +707,36 @@ namespace NActors {
         // UnsafeBecome methods don't verify the bindings of the stateFunc to the TDerived
         template <typename T>
         void UnsafeBecome(T stateFunc) {
-            this->IActorCallback::Become(stateFunc);
+            this->IActor::Become(stateFunc);
         }
 
         template <typename T, typename... TArgs>
         void UnsafeBecome(T stateFunc, const TActorContext& ctx, TArgs&&... args) {
-            this->IActorCallback::Become(stateFunc, ctx, std::forward<TArgs>(args)...);
+            this->IActor::Become(stateFunc, ctx, std::forward<TArgs>(args)...);
         }
 
         template <typename T, typename... TArgs>
         void UnsafeBecome(T stateFunc, TArgs&&... args) {
-            this->IActorCallback::Become(stateFunc, std::forward<TArgs>(args)...);
+            this->IActor::Become(stateFunc, std::forward<TArgs>(args)...);
         }
 
         template <typename T>
         void Become(T stateFunc) {
             // TODO(kruall): have to uncomment asserts after end of sync contrib/ydb
             // static_assert(std::is_convertible_v<T, TDerivedReceiveFunc>);
-            this->IActorCallback::Become(stateFunc);
+            this->IActor::Become(stateFunc);
         }
 
         template <typename T, typename... TArgs>
         void Become(T stateFunc, const TActorContext& ctx, TArgs&&... args) {
             // static_assert(std::is_convertible_v<T, TDerivedReceiveFunc>);
-            this->IActorCallback::Become(stateFunc, ctx, std::forward<TArgs>(args)...);
+            this->IActor::Become(stateFunc, ctx, std::forward<TArgs>(args)...);
         }
 
         template <typename T, typename... TArgs>
         void Become(T stateFunc, TArgs&&... args) {
             // static_assert(std::is_convertible_v<T, TDerivedReceiveFunc>);
-            this->IActorCallback::Become(stateFunc, std::forward<TArgs>(args)...);
+            this->IActor::Become(stateFunc, std::forward<TArgs>(args)...);
         }
     };
 

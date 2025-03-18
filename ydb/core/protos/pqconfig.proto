@@ -32,6 +32,7 @@ message TPartitionMeta {
     optional uint64 EndOffset = 2;
     optional bool SubDomainOutOfSpace = 3 [default = false];
     optional TPartitionCounterData CounterData = 4;
+    optional uint64 EndWriteTimestamp = 5;
 }
 
 message TPartitionTxMeta {
@@ -61,7 +62,7 @@ message TPQConfig {
 
     optional NKikimrClient.TKeyValueRequest.ETactic Tactic = 13 [default = MAX_THROUGHPUT];
 
-    optional bool RequireCredentialsInNewProtocol = 14 [default = true];
+    optional bool RequireCredentialsInNewProtocol = 14 [default = false];
 
     optional string ClusterTablePath = 15 [default = ""];
     optional string VersionTablePath = 16 [default = ""];
@@ -206,6 +207,8 @@ message TPQConfig {
 
     optional uint64 BalancerWakeupIntervalSec = 54 [default = 30];
     optional uint64 BalancerStatsWakeupIntervalSec = 55 [default = 5];
+
+    optional uint64 MaxWriteSessionBytesInflight = 57 [default = 1000000];
 }
 
 message TChannelProfile {
@@ -311,8 +314,13 @@ message TOffloadConfig {
         optional NKikimrProto.TPathID DstPathId = 2;
     }
 
+    message TIncrementalRestore {
+        optional NKikimrProto.TPathID DstPathId = 1;
+    }
+
     oneof Strategy {
         TIncrementalBackup IncrementalBackup = 1;
+        TIncrementalRestore IncrementalRestore = 2;
     }
 }
 
@@ -404,6 +412,7 @@ message TPQTabletConfig {
         CAN_SPLIT = 1;
         // The autoscaling algorithm will both increase and decrease partitions count depending on the load characteristics.
         CAN_SPLIT_AND_MERGE = 2;
+        PAUSED = 3;
     }
 
     // Strategy for automatically changing the number of topic partitions depending on the load
@@ -420,6 +429,7 @@ message TPQTabletConfig {
     }
     optional TPartitionStrategy PartitionStrategy = 35;
 
+    // The field is filled in only for the PQ tablet. Contains information about linked partitions for constructing a partial PartitionGraph.
     repeated TPartition AllPartitions = 36; // filled by schemeshard
 
     optional TOffloadConfig OffloadConfig = 38;
@@ -643,7 +653,7 @@ message TReleasePartition {
     optional uint64 Generation = 2;
     optional string Session = 3;
     optional string ClientId = 4;
-    optional uint32 Count = 5 [deprecated = true]; // Remove at 2025-1
+    reserved 5; // optional uint32 Count = 5;
     optional NActorsProto.TActorId PipeClient = 6;
     optional uint32 Group = 7;
     optional string Path = 8;
@@ -856,6 +866,9 @@ message THasDataInfo {
     optional uint64 Cookie = 5;
 
     optional string ClientId = 6;
+
+    optional int32 MaxTimeLagMs = 7; // optional, default = infinity, why we use int instead of uint?
+    optional uint64 ReadTimestampMs = 8; //optional, default = 0
 }
 
 message THasDataInfoResponse { //signal
@@ -1074,6 +1087,20 @@ message TEvPartitionScaleStatusChanged {
     required EScaleStatus ScaleStatus = 2;
 };
 
+message TPartitions {
+    message TPartitionInfo {
+        required uint32 PartitionId = 1;
+
+        message TMessageGroup {
+            required string Id = 1;
+            optional uint64 SeqNo = 2;
+        };
+        repeated TMessageGroup MessageGroup = 2;
+    };
+
+    repeated TPartitionInfo Partition = 1;
+}
+
 message TTransaction {
     enum EKind {
         KIND_UNKNOWN = 0;
@@ -1084,15 +1111,22 @@ message TTransaction {
     enum EState {
         UNKNOWN = 0;
         PREPARING = 1;
-        PREPARED = 2;     // хранится
+        PREPARED = 2;     // persist
         PLANNING = 3;
-        PLANNED = 4;      // хранится. хотим выкинуть и не персистить
+        PLANNED = 4;      // persist
         CALCULATING = 5;
         CALCULATED = 6;
-        WAIT_RS = 7;      // хранится
+        WAIT_RS = 7;      // persist
         EXECUTING = 8;
-        EXECUTED = 9;
+        EXECUTED = 9;     // persist
+        WAIT_RS_ACKS = 11;
+        DELETING = 10;
     };
+
+    message TPredicateReceived {
+        optional uint64 TabletId = 1;
+        optional bool Predicate = 2;
+    }
 
     optional EKind Kind = 11;
     optional uint64 Step = 8;
@@ -1101,20 +1135,21 @@ message TTransaction {
     optional uint64 MinStep = 3;
     optional uint64 MaxStep = 4;
 
+    repeated TPredicateReceived PredicatesReceived = 5;
+    repeated uint64 PredicateRecipients = 6;
+    optional bool Predicate = 9;
+
     //
     // TDataTransaction
     //
-    repeated uint64 Senders = 5;
-    repeated uint64 Receivers = 6;
     repeated TPartitionOperation Operations = 7;
-    optional bool SelfPredicate = 9;  // только предикаты партиций. предикаты коллег отдельно
-    optional bool AggrPredicate = 10;
 
     //
     // TConfigTransaction
     //
     optional TPQTabletConfig TabletConfig = 12;
     optional TBootstrapConfig BootstrapConfig = 13;
+    optional TPartitions Partitions = 16;
 
     //
     // получатель результата

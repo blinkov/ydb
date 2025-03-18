@@ -5,7 +5,7 @@
 #include <util/generic/map.h>
 #include <util/string/cast.h>
 
-#include <ydb/library/yql/providers/common/provider/yql_provider_names.h>
+#include <yql/essentials/providers/common/provider/yql_provider_names.h>
 #include <ydb/library/yql/providers/common/db_id_async_resolver/db_async_resolver.h>
 
 
@@ -14,20 +14,27 @@ namespace NKikimr::NExternalSource {
 namespace {
 
 struct TExternalSourceFactory : public IExternalSourceFactory {
-    TExternalSourceFactory(const TMap<TString, IExternalSource::TPtr>& sources)
+    TExternalSourceFactory(
+        const TMap<TString, IExternalSource::TPtr>& sources,
+        const std::set<TString>& availableExternalDataSources)
         : Sources(sources)
+        , AvailableExternalDataSources(availableExternalDataSources)
     {}
 
     IExternalSource::TPtr GetOrCreate(const TString& type) const override {
         auto it = Sources.find(type);
-        if (it != Sources.end()) {
-            return it->second;
+        if (it == Sources.end()) {
+            throw TExternalSourceException() << "External source with type " << type << " was not found";
         }
-        ythrow TExternalSourceException() << "External source with type " << type << " was not found";
+        if (!AvailableExternalDataSources.contains(type)) {
+            throw TExternalSourceException() << "External source with type " << type << " is disabled. Please contact your system administrator to enable it";
+        }
+        return it->second;
     }
 
 private:
-    TMap<TString, IExternalSource::TPtr> Sources;
+    const TMap<TString, IExternalSource::TPtr> Sources;
+    const std::set<TString> AvailableExternalDataSources;
 };
 
 }
@@ -36,12 +43,14 @@ IExternalSourceFactory::TPtr CreateExternalSourceFactory(const std::vector<TStri
                                                          NActors::TActorSystem* actorSystem,
                                                          size_t pathsLimit,
                                                          std::shared_ptr<NYql::ISecuredServiceAccountCredentialsFactory> credentialsFactory,
-                                                         bool enableInfer) {
+                                                         bool enableInfer,
+                                                         bool allowLocalFiles,
+                                                         const std::set<TString>& availableExternalDataSources) {
     std::vector<TRegExMatch> hostnamePatternsRegEx(hostnamePatterns.begin(), hostnamePatterns.end());
     return MakeIntrusive<TExternalSourceFactory>(TMap<TString, IExternalSource::TPtr>{
         {
             ToString(NYql::EDatabaseType::ObjectStorage),
-            CreateObjectStorageExternalSource(hostnamePatternsRegEx, actorSystem, pathsLimit, std::move(credentialsFactory), enableInfer)
+            CreateObjectStorageExternalSource(hostnamePatternsRegEx, actorSystem, pathsLimit, std::move(credentialsFactory), enableInfer, allowLocalFiles)
         },
         {
             ToString(NYql::EDatabaseType::ClickHouse),
@@ -70,7 +79,21 @@ IExternalSourceFactory::TPtr CreateExternalSourceFactory(const std::vector<TStri
         {
             ToString(NYql::EDatabaseType::MsSQLServer),
             CreateExternalDataSource(TString{NYql::GenericProviderName}, {"BASIC"}, {"database_name", "use_tls"}, hostnamePatternsRegEx)
-        }}); 
+        },
+        {
+            ToString(NYql::EDatabaseType::Oracle),
+            CreateExternalDataSource(TString{NYql::GenericProviderName}, {"BASIC"}, {"database_name", "use_tls", "service_name"}, hostnamePatternsRegEx)
+        },
+        {
+            ToString(NYql::EDatabaseType::Logging),
+            CreateExternalDataSource(TString{NYql::GenericProviderName}, {"SERVICE_ACCOUNT"}, {"folder_id"}, hostnamePatternsRegEx)
+        },
+        {
+            ToString(NYql::EDatabaseType::Solomon),
+            CreateExternalDataSource(TString{NYql::SolomonProviderName}, {"NONE", "TOKEN"}, {"use_ssl", "grpc_port"}, hostnamePatternsRegEx)
+        }
+    },
+    availableExternalDataSources); 
 }
 
 }

@@ -7,6 +7,7 @@
 #include <util/system/types.h>
 #include <util/digest/multi.h>
 #include <util/str_stl.h>
+#include <util/string/builder.h>
 
 #include <functional>
 
@@ -42,6 +43,15 @@ public:
             (InternalPartitionId == rhs.InternalPartitionId);
     }
 
+    bool IsLess(const TPartitionId& rhs) const
+    {
+        auto makeTuple = [](const TPartitionId& v) {
+            return std::make_tuple(v.OriginalPartitionId, v.WriteId, v.InternalPartitionId);
+        };
+
+        return makeTuple(*this) < makeTuple(rhs);
+    }
+
     void ToStream(IOutputStream& s) const
     {
         if (WriteId.Defined()) {
@@ -49,6 +59,13 @@ public:
         } else {
             s << OriginalPartitionId;
         }
+    }
+
+    TString ToString() const
+    {
+        TStringBuilder s;
+        s << *this;
+        return s;
     }
 
     bool IsSupportivePartition() const
@@ -65,6 +82,12 @@ inline
 bool operator==(const TPartitionId& lhs, const TPartitionId& rhs)
 {
     return lhs.IsEqual(rhs);
+}
+
+inline
+bool operator<(const TPartitionId& lhs, const TPartitionId& rhs)
+{
+    return lhs.IsLess(rhs);
 }
 
 inline

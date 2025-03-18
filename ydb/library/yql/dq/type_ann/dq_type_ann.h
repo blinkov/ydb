@@ -1,7 +1,7 @@
 #pragma once
 
-#include <ydb/library/yql/core/yql_graph_transformer.h>
-#include <ydb/library/yql/core/yql_type_annotation.h>
+#include <yql/essentials/core/yql_graph_transformer.h>
+#include <yql/essentials/core/yql_type_annotation.h>
 
 #include <ydb/library/yql/dq/expr_nodes/dq_expr_nodes.h>
 
@@ -75,6 +75,9 @@ struct TDqStageSettings {
     NNodes::TCoNameValueTupleList BuildNode(TExprContext& ctx, TPositionHandle pos) const;
 };
 
+
+const TTypeAnnotationNode* GetColumnType(const NNodes::TDqConnection& node, const TStructExprType& structType, TStringBuf name, TPositionHandle pos, TExprContext& ctx);
+const TTypeAnnotationNode* GetDqConnectionType(const NYql::NNodes::TDqConnection& node, TExprContext& ctx);
 
 TString PrintDqStageOnly(const NNodes::TDqStageBase& stage, TExprContext& ctx);
 

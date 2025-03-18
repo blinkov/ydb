@@ -2,12 +2,14 @@ UNITTEST()
 
 FORK_SUBTESTS()
 
+IF (SANITIZER_TYPE)
+    REQUIREMENTS(ram:32)
+ENDIF()
+
 IF (SANITIZER_TYPE OR WITH_VALGRIND)
-    TIMEOUT(3600)
     SIZE(LARGE)
-    TAG(ya:fat)
+    INCLUDE(${ARCADIA_ROOT}/ydb/tests/large.inc)
 ELSE()
-    TIMEOUT(600)
     SIZE(MEDIUM)
 ENDIF()
 
@@ -16,6 +18,7 @@ SRCS(
     assimilation.cpp
     block_race.cpp
     counting_events.cpp
+    deadlines.cpp
     decommit_3dc.cpp
     defrag.cpp
     discover.cpp
@@ -25,6 +28,7 @@ SRCS(
     gc.cpp
     gc_quorum_3dc.cpp
     get.cpp
+    get_block.cpp
     group_reconfiguration.cpp
     incorrect_queries.cpp
     index_restore_get.cpp
@@ -37,10 +41,13 @@ SRCS(
     recovery.cpp
     sanitize_groups.cpp
     scrub_fast.cpp
+    shred.cpp
     snapshots.cpp
     space_check.cpp
     sync.cpp
     ut_helpers.cpp
+    validation.cpp
+    vdisk_malfunction.cpp
 )
 
 PEERDIR(
@@ -52,8 +59,6 @@ PEERDIR(
     ydb/core/blobstorage/vdisk/scrub
 )
 
-REQUIREMENTS(ram:32)
-
 END()
 
 RECURSE_FOR_TESTS(
@@ -62,10 +67,13 @@ RECURSE_FOR_TESTS(
     ut_blob_depot_fat
     ut_donor
     ut_group_reconfiguration
+    ut_huge
     ut_read_only_vdisk
     ut_osiris
     ut_replication
     ut_scrub
     ut_vdisk_restart
     ut_restart_pdisk
+    ut_read_only_pdisk
+    ut_stop_pdisk
 )

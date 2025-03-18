@@ -40,10 +40,24 @@ public:
     }
 };
 
-NKikimr::NColumnShard::TTxController::TProposeResult TSchemaTransactionOperator::DoStartProposeOnExecute(TColumnShard& owner, NTabletFlatExecutor::TTransactionContext& txc) {
+TTxController::TProposeResult TSchemaTransactionOperator::DoStartProposeOnExecute(TColumnShard& owner, NTabletFlatExecutor::TTransactionContext& txc) {
+    auto seqNo = SeqNoFromProto(SchemaTxBody.GetSeqNo());
+    auto lastSeqNo = owner.LastSchemaSeqNo;
+
+    // Check if proposal is outdated
+    if (seqNo < lastSeqNo) {
+        auto errorMessage = TStringBuilder() << "Ignoring outdated schema tx proposal at tablet " << owner.TabletID() << " txId " << GetTxId()
+                                             << " ssId " << owner.CurrentSchemeShardId << " seqNo " << seqNo << " lastSeqNo " << lastSeqNo;
+        return TProposeResult(NKikimrTxColumnShard::EResultStatus::SCHEMA_CHANGED, errorMessage);
+    }
+
     switch (SchemaTxBody.TxBody_case()) {
         case NKikimrTxColumnShard::TSchemaTxBody::kInitShard:
         {
+            if (owner.InitShardCounter.Add(1) != 1) {
+                AFL_WARN(NKikimrServices::TX_COLUMNSHARD)("event", "repeated_initialization")("tx_id", GetTxId())(
+                    "counter", owner.InitShardCounter.Val());
+            }
             auto validationStatus = ValidateTables(SchemaTxBody.GetInitShard().GetTables());
             if (validationStatus.IsFail()) {
                 return TProposeResult(NKikimrTxColumnShard::EResultStatus::SCHEMA_ERROR, "Invalid schema: " + validationStatus.GetErrorMessage());
@@ -65,21 +79,6 @@ NKikimr::NColumnShard::TTxController::TProposeResult TSchemaTransactionOperator:
         case NKikimrTxColumnShard::TSchemaTxBody::kDropTable:
         case NKikimrTxColumnShard::TSchemaTxBody::TXBODY_NOT_SET:
             break;
-    }
-
-    auto seqNo = SeqNoFromProto(SchemaTxBody.GetSeqNo());
-    auto lastSeqNo = owner.LastSchemaSeqNo;
-
-    // Check if proposal is outdated
-    if (seqNo < lastSeqNo) {
-        auto errorMessage = TStringBuilder()
-            << "Ignoring outdated schema tx proposal at tablet "
-            << owner.TabletID()
-            << " txId " << GetTxId()
-            << " ssId " << owner.CurrentSchemeShardId
-            << " seqNo " << seqNo
-            << " lastSeqNo " << lastSeqNo;
-        return TProposeResult(NKikimrTxColumnShard::EResultStatus::SCHEMA_CHANGED, errorMessage);
     }
 
     owner.UpdateSchemaSeqNo(seqNo, txc);
@@ -111,10 +110,6 @@ NKikimr::TConclusionStatus TSchemaTransactionOperator::ValidateTableSchema(const
         NTypeIds::Utf8,
         NTypeIds::Decimal
     };
-    if (!schema.HasEngine() ||
-        schema.GetEngine() != NKikimrSchemeOp::EColumnTableEngine::COLUMN_ENGINE_REPLACING_TIMESERIES) {
-        return TConclusionStatus::Fail("Invalid scheme engine: " + (schema.HasEngine() ? NKikimrSchemeOp::EColumnTableEngine_Name(schema.GetEngine()) : TString("No")));
-    }
 
     if (!schema.KeyColumnNamesSize()) {
         return TConclusionStatus::Fail("There is no key columns");
@@ -124,12 +119,14 @@ NKikimr::TConclusionStatus TSchemaTransactionOperator::ValidateTableSchema(const
     TVector<TString> columnErrors;
     for (const NKikimrSchemeOp::TOlapColumnDescription& column : schema.GetColumns()) {
         TString name = column.GetName();
-        void* typeDescr = nullptr;
-        if (column.GetTypeId() == NTypeIds::Pg && column.HasTypeInfo()) {
-            typeDescr = NPg::TypeDescFromPgTypeId(column.GetTypeInfo().GetPgTypeId());
+        NScheme::TTypeId typeId = column.GetTypeId();
+        NScheme::TTypeInfo schemeType;
+        if (column.HasTypeInfo()) {
+            schemeType = NScheme::TypeInfoFromProto(typeId, column.GetTypeInfo());
+        } else {
+            schemeType = typeId;
         }
 
-        NScheme::TTypeInfo schemeType(column.GetTypeId(), typeDescr);
         if (keyColumns.contains(name) && !pkSupportedTypes.contains(column.GetTypeId())) {
             columnErrors.emplace_back("key column " + name + " has unsupported type " + column.GetTypeName());
         }
@@ -166,7 +163,7 @@ NKikimr::TConclusionStatus TSchemaTransactionOperator::ValidateTables(::google::
     } return TConclusionStatus::Success();
 }
 
-bool TSchemaTransactionOperator::DoOnStartAsync(TColumnShard& owner) {
+void TSchemaTransactionOperator::DoOnTabletInit(TColumnShard& owner) {
     AFL_VERIFY(WaitPathIdsToErase.empty());
     switch (SchemaTxBody.TxBody_case()) {
         case NKikimrTxColumnShard::TSchemaTxBody::kInitShard:
@@ -174,8 +171,7 @@ bool TSchemaTransactionOperator::DoOnStartAsync(TColumnShard& owner) {
         case NKikimrTxColumnShard::TSchemaTxBody::kEnsureTables:
         {
             for (auto&& i : SchemaTxBody.GetEnsureTables().GetTables()) {
-                AFL_VERIFY(!owner.TablesManager.HasTable(i.GetPathId()));
-                if (owner.TablesManager.HasTable(i.GetPathId(), true)) {
+                if (owner.TablesManager.HasTable(i.GetPathId(), true) && !owner.TablesManager.HasTable(i.GetPathId())) {
                     WaitPathIdsToErase.emplace(i.GetPathId());
                 }
             }
@@ -190,11 +186,9 @@ bool TSchemaTransactionOperator::DoOnStartAsync(TColumnShard& owner) {
     if (WaitPathIdsToErase.size()) {
         AFL_WARN(NKikimrServices::TX_COLUMNSHARD)("event", "wait_remove_path_id")("pathes", JoinSeq(",", WaitPathIdsToErase))("tx_id", GetTxId());
         owner.Subscribers->RegisterSubscriber(std::make_shared<TWaitEraseTablesTxSubscriber>(WaitPathIdsToErase, GetTxId()));
-        return true;
     } else {
         AFL_WARN(NKikimrServices::TX_COLUMNSHARD)("event", "remove_pathes_cleaned")("tx_id", GetTxId());
         owner.Execute(new TTxFinishAsyncTransaction(owner, GetTxId()));
-        return false;
     }
 }
 

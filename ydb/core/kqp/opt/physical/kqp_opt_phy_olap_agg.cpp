@@ -4,7 +4,7 @@
 
 #include <ydb/core/formats/arrow/ssa_runtime_version.h>
 
-#include <ydb/library/yql/core/yql_opt_utils.h>
+#include <yql/essentials/core/yql_opt_utils.h>
 #include <ydb/library/actors/core/log.h>
 
 #include <vector>
@@ -245,11 +245,6 @@ TExprBase KqpPushDownOlapGroupByKeysImpl(TExprBase node, TExprContext& ctx, bool
 }
 
 TExprBase KqpPushDownOlapGroupByKeys(TExprBase node, TExprContext& ctx, const TKqpOptimizeContext& kqpCtx) {
-    if (NKikimr::NSsa::RuntimeVersion < 2U) {
-        // We introduced aggregate pushdown in v2 of SSA program
-        return node;
-    }
-
     if (!kqpCtx.Config->HasOptEnableOlapPushdown() || !kqpCtx.Config->HasOptEnableOlapProvideComputeSharding()) {
         return node;
     }
@@ -271,11 +266,6 @@ TExprBase KqpPushDownOlapGroupByKeys(TExprBase node, TExprContext& ctx, const TK
 
 TExprBase KqpPushOlapAggregate(TExprBase node, TExprContext& ctx, const TKqpOptimizeContext& kqpCtx)
 {
-    if (NKikimr::NSsa::RuntimeVersion < 2U) {
-        // We introduced aggregate pushdown in v2 of SSA program
-        return node;
-    }
-
     if (!kqpCtx.Config->HasOptEnableOlapPushdown()) {
         return node;
     }
@@ -296,11 +286,6 @@ TExprBase KqpPushOlapAggregate(TExprBase node, TExprContext& ctx, const TKqpOpti
     }
 
     if (!maybeRead) {
-        return node;
-    }
-
-    // temporary for keys grouping push down not useful
-    if (!aggCombine.Keys().Empty()) {
         return node;
     }
 
@@ -378,11 +363,6 @@ TExprBase KqpPushOlapAggregate(TExprBase node, TExprContext& ctx, const TKqpOpti
 
 TExprBase KqpPushOlapLength(TExprBase node, TExprContext& ctx, const TKqpOptimizeContext& kqpCtx)
 {
-    if (NKikimr::NSsa::RuntimeVersion < 2U) {
-        // We introduced aggregate pushdown in v2 of SSA program
-        return node;
-    }
-
     if (!kqpCtx.Config->HasOptEnableOlapPushdown()) {
         return node;
     }

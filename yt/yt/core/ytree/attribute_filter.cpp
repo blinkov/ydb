@@ -3,7 +3,6 @@
 #include "node.h"
 #include "convert.h"
 #include "fluent.h"
-#include "ypath_client.h"
 
 #include <yt/yt/core/misc/protobuf_helpers.h>
 
@@ -31,7 +30,7 @@ using NYT::FromProto;
 ////////////////////////////////////////////////////////////////////////////////
 
 //! Used only for YT_LOG_ALERT.
-YT_DEFINE_GLOBAL(const NLogging::TLogger, Logger, "AttributeFilter");
+static YT_DEFINE_GLOBAL(const NLogging::TLogger, Logger, "AttributeFilter");
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -197,20 +196,21 @@ std::unique_ptr<IHeterogenousFilterConsumer> CreateFilteringConsumerImpl(
 
 ////////////////////////////////////////////////////////////////////////////////
 
-TAttributeFilter::TAttributeFilter(std::vector<TString> keys, std::vector<TYPath> paths)
+TAttributeFilter::TAttributeFilter(std::vector<IAttributeDictionary::TKey> keys, std::vector<TYPath> paths)
     : Keys(std::move(keys))
     , Paths(std::move(paths))
     , Universal(false)
 { }
 
-TAttributeFilter& TAttributeFilter::operator =(std::vector<TString> keys)
-{
-    Keys = std::move(keys);
-    Paths = {};
-    Universal = false;
+TAttributeFilter::TAttributeFilter(std::initializer_list<TString> keys)
+    : Keys({keys.begin(), keys.end()})
+    , Universal(false)
+{ }
 
-    return *this;
-}
+TAttributeFilter::TAttributeFilter(const std::vector<TString>& keys)
+    : Keys({keys.begin(), keys.end()})
+    , Universal(false)
+{ }
 
 TAttributeFilter::operator bool() const
 {
@@ -408,7 +408,7 @@ std::unique_ptr<TAttributeFilter::IAsyncFilteringConsumer> TAttributeFilter::Cre
 
 ////////////////////////////////////////////////////////////////////////////////
 
-// NB: universal filter is represented as an absent protobuf value.
+// NB: Universal filter is represented as an absent protobuf value.
 
 void ToProto(NProto::TAttributeFilter* protoFilter, const TAttributeFilter& filter)
 {
@@ -448,12 +448,12 @@ void Deserialize(TAttributeFilter& filter, const INodePtr& node)
             filter.Universal = false;
             filter.Keys.clear();
             if (auto keysNode = mapNode->FindChild("keys")) {
-                filter.Keys = ConvertTo<std::vector<TString>>(keysNode);
+                filter.Keys = ConvertTo<std::vector<IAttributeDictionary::TKey>>(keysNode);
             }
 
             filter.Paths.clear();
             if (auto pathsNode = mapNode->FindChild("paths")) {
-                filter.Paths = ConvertTo<std::vector<TString>>(pathsNode);
+                filter.Paths = ConvertTo<std::vector<TYPath>>(pathsNode);
             }
 
             break;
@@ -461,7 +461,7 @@ void Deserialize(TAttributeFilter& filter, const INodePtr& node)
         case ENodeType::List: {
             // Compatibility mode with HTTP clients that specify attribute keys as string lists.
             filter.Universal = false;
-            filter.Keys = ConvertTo<std::vector<TString>>(node);
+            filter.Keys = ConvertTo<std::vector<IAttributeDictionary::TKey>>(node);
             filter.Paths = {};
             break;
         }
@@ -488,6 +488,32 @@ void FormatValue(
 {
     if (attributeFilter) {
         builder->AppendFormat("{Keys: %v, Paths: %v}", attributeFilter.Keys, attributeFilter.Paths);
+    } else {
+        builder->AppendString("(universal)");
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+
+TShrunkAttributeFilterView MakeShrunkFormattableView(
+    const TAttributeFilter& attributeFilter,
+    size_t limit)
+{
+    return {attributeFilter, limit};
+}
+
+void FormatValue(
+    TStringBuilderBase* builder,
+    const TShrunkAttributeFilterView& view,
+    TStringBuf /*spec*/)
+{
+    const auto& attributeFilter = view.AttributeFilter;
+    auto limit = view.Limit;
+    if (attributeFilter) {
+        builder->AppendFormat("{Keys: %v, Paths: %v}",
+            MakeShrunkFormattableView(attributeFilter.Keys, TDefaultFormatter{}, limit),
+            MakeShrunkFormattableView(attributeFilter.Paths, TDefaultFormatter{}, limit));
     } else {
         builder->AppendString("(universal)");
     }

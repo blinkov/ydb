@@ -1,8 +1,8 @@
 #include "yql_solomon_provider_impl.h"
 
 #include <ydb/library/yql/providers/solomon/expr_nodes/yql_solomon_expr_nodes.h>
-#include <ydb/library/yql/providers/common/provider/yql_provider_names.h>
-#include <ydb/library/yql/providers/common/provider/yql_provider.h>
+#include <yql/essentials/providers/common/provider/yql_provider_names.h>
+#include <yql/essentials/providers/common/provider/yql_provider.h>
 
 namespace NYql {
 
@@ -34,7 +34,11 @@ public:
     }
 
     TStatus HandleSoSourceSettings(const TExprNode::TPtr& input, TExprContext& ctx) {
-        if (!EnsureArgsCount(*input, 12U, ctx)) {
+        if (!EnsureArgsCount(*input, 14, ctx)) {
+            return TStatus::Error;
+        }
+
+        if (!EnsureWorldType(*input->Child(TSoSourceSettings::idx_World), ctx)) {
             return TStatus::Error;
         }
 
@@ -73,13 +77,25 @@ public:
             return TStatus::Error;
         }
 
+        auto& selectors = *input->Child(TSoSourceSettings::idx_Selectors);
+        if (!EnsureAtom(selectors, ctx)) {
+            return TStatus::Error;
+        }
+        bool hasSelectors = !selectors.Content().empty();
+
         auto& program = *input->Child(TSoSourceSettings::idx_Program);
         if (!EnsureAtom(program, ctx)) {
             return TStatus::Error;
         }
+        bool hasProgram = !program.Content().empty();
 
-        if (program.Content().empty()) {
-            ctx.AddError(TIssue(ctx.GetPosition(program.Pos()), "program must be specified"));
+        if (hasSelectors && hasProgram) {
+            ctx.AddError(TIssue(ctx.GetPosition(selectors.Pos()), "either program or selectors must be specified"));
+            return TStatus::Error;
+        }
+
+        if (!hasSelectors && !hasProgram) {
+            ctx.AddError(TIssue(ctx.GetPosition(selectors.Pos()), "specify either program or selectors"));
             return TStatus::Error;
         }
 
@@ -170,7 +186,7 @@ public:
                 }
                 columnOrder.push_back(ToString(col));
             }
-            return State_->Types->SetColumnOrder(*input, columnOrder, ctx);
+            return State_->Types->SetColumnOrder(*input, TColumnOrder(columnOrder), ctx);
         }
 
         const auto type = rowType.GetTypeAnn()->Cast<TTypeExprType>()->GetType();

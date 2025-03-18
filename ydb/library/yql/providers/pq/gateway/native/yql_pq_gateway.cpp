@@ -1,9 +1,9 @@
 #include "yql_pq_gateway.h"
 #include "yql_pq_session.h"
 
-#include <ydb/library/yql/utils/log/context.h>
+#include <yql/essentials/utils/log/context.h>
 
-#include <ydb/public/sdk/cpp/client/ydb_driver/driver.h>
+#include <ydb/public/sdk/cpp/include/ydb-cpp-sdk/client/driver/driver.h>
 
 #include <util/system/mutex.h>
 
@@ -40,8 +40,12 @@ public:
         const TString& database,
         bool secure) override;
 
+    void UpdateClusterConfigs(const TPqGatewayConfigPtr& config) override;
+
+    ITopicClient::TPtr GetTopicClient(const NYdb::TDriver& driver, const NYdb::NTopic::TTopicClientSettings& settings) override;
+    NYdb::NTopic::TTopicClientSettings GetTopicClientSettings() const override;
+
 private:
-    void InitClusterConfigs();
     TPqSession::TPtr GetExistingSession(const TString& sessionId) const;
 
 private:
@@ -54,6 +58,7 @@ private:
     NYdb::TDriver YdbDriver;
     TPqClusterConfigsMapPtr ClusterConfigs;
     THashMap<TString, TPqSession::TPtr> Sessions;
+    TMaybe<NYdb::NTopic::TTopicClientSettings> CommonTopicClientSettings;
 };
 
 TPqNativeGateway::TPqNativeGateway(const TPqGatewayServices& services)
@@ -63,14 +68,15 @@ TPqNativeGateway::TPqNativeGateway(const TPqGatewayServices& services)
     , CredentialsFactory(services.CredentialsFactory)
     , CmConnections(services.CmConnections)
     , YdbDriver(services.YdbDriver)
+    , CommonTopicClientSettings(services.CommonTopicClientSettings)
 {
     Y_UNUSED(FunctionRegistry);
-    InitClusterConfigs();
+    UpdateClusterConfigs(Config);
 }
 
-void TPqNativeGateway::InitClusterConfigs() {
+void TPqNativeGateway::UpdateClusterConfigs(const TPqGatewayConfigPtr& config) {
     ClusterConfigs = std::make_shared<TPqClusterConfigsMap>();
-    for (const auto& cfg : Config->GetClusterMapping()) {
+    for (const auto& cfg : config->GetClusterMapping()) {
         auto& config = (*ClusterConfigs)[cfg.GetName()];
         config = cfg;
     }
@@ -138,8 +144,32 @@ IPqGateway::TPtr CreatePqNativeGateway(const TPqGatewayServices& services) {
     return MakeIntrusive<TPqNativeGateway>(services);
 }
 
+ITopicClient::TPtr TPqNativeGateway::GetTopicClient(const NYdb::TDriver& driver, const NYdb::NTopic::TTopicClientSettings& settings = NYdb::NTopic::TTopicClientSettings()) {
+    return MakeIntrusive<TNativeTopicClient>(driver, settings);
+}
+
+NYdb::NTopic::TTopicClientSettings TPqNativeGateway::GetTopicClientSettings() const {
+    return CommonTopicClientSettings ? *CommonTopicClientSettings : NYdb::NTopic::TTopicClientSettings();
+}
+
 TPqNativeGateway::~TPqNativeGateway() {
     Sessions.clear();
 }
+
+class TPqNativeGatewayFactory : public IPqGatewayFactory {
+public:
+    TPqNativeGatewayFactory(const NYql::TPqGatewayServices& services)
+        : Services(services) {}
+
+    IPqGateway::TPtr CreatePqGateway() override {
+        return CreatePqNativeGateway(Services);
+    }
+    const NYql::TPqGatewayServices Services;
+};
+
+IPqGatewayFactory::TPtr CreatePqNativeGatewayFactory(const NYql::TPqGatewayServices& services) {
+    return MakeIntrusive<TPqNativeGatewayFactory>(services);
+}
+
 
 } // namespace NYql

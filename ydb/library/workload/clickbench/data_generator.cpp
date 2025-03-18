@@ -1,6 +1,10 @@
 #include "data_generator.h"
+#include <ydb/library/yaml_json/yaml_to_json.h>
+#include <library/cpp/resource/resource.h>
 #include <library/cpp/streams/factory/open_by_signature/factory.h>
+#include <contrib/libs/yaml-cpp/include/yaml-cpp/node/parse.h>
 #include <util/stream/file.h>
+
 #include <thread>
 
 namespace NYdbWorkload {
@@ -30,7 +34,7 @@ TBulkDataGeneratorList TClickbenchWorkloadDataInitializerGenerator::DoGetBulkIni
 }
 
 TClickbenchWorkloadDataInitializerGenerator::TDataGenerartor::TDataGenerartor(const TClickbenchWorkloadDataInitializerGenerator& owner)
-    : IBulkDataGenerator("hits", CalcSize(owner))
+    : IBulkDataGenerator("hits", DataSetSize)
     , Owner(owner)
 {
     if (Owner.GetDataFiles().IsDirectory()) {
@@ -46,37 +50,46 @@ TClickbenchWorkloadDataInitializerGenerator::TDataGenerartor::TDataGenerartor(co
 
 IBulkDataGenerator::TDataPortions TClickbenchWorkloadDataInitializerGenerator::TDataGenerartor::GenerateDataPortion() {
     while (true) {
-        size_t index;
         TFile::TPtr file;
         with_lock(Lock) {
-            if (Files.empty()) {
+            if (!FilesCount) {
                 return {};
             }
-            index = std::hash<std::thread::id>{}(std::this_thread::get_id()) % Files.size();
-            file = Files[index];
-        }
-        if (auto result = file->GetPortion()) {
-            return {result};
-        }
-        with_lock(Lock) {
-            if (index < Files.size() && file == Files[index]) {
-                if (index + 1 != Files.size()) {
-                    Files[index].Swap(Files.back());
+            if (FirstPortion) {
+                FirstPortion = false;
+                ui64 toSkip = 0;
+                if (Owner.StateProcessor) {
+                    for (const auto& [file, state]: Owner.StateProcessor->GetState()) {
+                        toSkip += state.Position;
+                    }
                 }
+                if (toSkip) {
+                    return { MakeIntrusive<TDataPortion>(
+                        Owner.Params.GetFullTableName(nullptr),
+                        TDataPortion::TSkip(),
+                        toSkip
+                    )};
+                }
+            }
+            if (!Files.empty()) {
+                file = Files.back();
                 Files.pop_back();
             }
         }
-    }
-}
-
-ui64 TClickbenchWorkloadDataInitializerGenerator::TDataGenerartor::CalcSize(const TClickbenchWorkloadDataInitializerGenerator& owner) {
-    ui64 result = 99997497;
-    if (owner.StateProcessor) {
-        for (const auto& [file, state]: owner.StateProcessor->GetState()) {
-            result -= state.Position;
+        if (!file) {
+            Sleep(TDuration::MilliSeconds(100));
+            continue;
+        }
+        if (auto result = file->GetPortion()) {
+            auto g = Guard(Lock);
+            Files.push_back(file);
+            file.Drop();
+            return {result};
+        } else {
+            auto g = Guard(Lock);
+            --FilesCount;
         }
     }
-    return result;
 }
 
 class TClickbenchWorkloadDataInitializerGenerator::TDataGenerartor::TCsvFileBase: public TClickbenchWorkloadDataInitializerGenerator::TDataGenerartor::TFile {
@@ -88,24 +101,13 @@ public:
         , Delimiter(delimiter)
         , Foramt(foramt)
     {
-        const auto schema = NResource::Find("click_bench_schema.sql");
-        TStringInput si (schema);
+        const auto yaml = YAML::Load(NResource::Find("click_bench_schema.yaml").c_str());
+        const auto json = NKikimr::NYaml::Yaml2Json(yaml, true);
+        const auto& columns = json["table"]["columns"].GetArray();
         TVector<TString> header;
-        header.reserve(105);
-        TString line;
-        ui32 field = 0;
-        while (si.ReadLine(line)) {
-            if (line.find("{notnull}") != TString::npos) {
-                const auto parts = StringSplitter(line).Split(' ').SkipEmpty().ToList<TString>();
-                header.push_back(parts[0]);
-                if (parts[1].StartsWith("Date")) {
-                    DateFileds.insert(field);
-                }
-                if (parts[1].StartsWith("Timestamp")) {
-                    TsFileds.insert(field);
-                }
-                ++field;
-            }
+        header.reserve(columns.size());
+        for (const auto& c: columns) {
+            header.emplace_back(c["name"].GetString());
         }
         Header = JoinSeq(Delimiter, header);
     }
@@ -116,7 +118,8 @@ public:
         with_lock(Lock) {
             TString line;
             if (Owner.Owner.StateProcessor && Owner.Owner.StateProcessor->GetState().contains(Path)) {
-                while(Owner.Owner.StateProcessor->GetState().at(Path).Position > Readed && Decompressor->ReadLine(line)) {
+                auto position = Owner.Owner.StateProcessor->GetState().at(Path).Position;
+                while(position > Readed && Decompressor->ReadLine(line)) {
                     ++Readed;
                 }
             }
@@ -152,8 +155,6 @@ private:
     TString Path;
     THolder<IInputStream> Decompressor;
     TString Header;
-    TSet<ui32> DateFileds;
-    TSet<ui32> TsFileds;
     const TString& Delimiter;
     const TString& Foramt;
     TAdaptiveLock Lock;
@@ -181,6 +182,7 @@ void TClickbenchWorkloadDataInitializerGenerator::TDataGenerartor::AddFile(const
     } else if (name.EndsWith(".csv") || name.EndsWith(".csv.gz")) {
         Files.push_back(MakeIntrusive<TCsvFile>(*this, path));
     }
+    ++FilesCount;
 }
 
 }

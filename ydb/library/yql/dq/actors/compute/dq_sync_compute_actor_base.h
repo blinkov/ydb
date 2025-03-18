@@ -1,3 +1,5 @@
+#pragma once
+
 #include "dq_compute_actor_impl.h"
 #include "dq_compute_actor_async_input_helper.h"
 #include <ydb/library/yql/dq/actors/spilling/spiller_factory.h>
@@ -28,7 +30,7 @@ protected:
     void DoExecuteImpl() override{
         auto sourcesState = static_cast<TDerived*>(this)->GetSourcesState();
 
-        TBase::PollAsyncInput();
+        auto lastPollResult = TBase::PollAsyncInput();
         ERunStatus status = TaskRunner->Run();
 
         CA_LOG_T("Resume execution, run status: " << status);
@@ -42,6 +44,13 @@ protected:
         }
 
         TBase::ProcessOutputsImpl(status);
+
+        if (lastPollResult && (*lastPollResult != EResumeSource::CAPollAsyncNoSpace || status == ERunStatus::PendingInput)) {
+            // If only reason for continuing was lack on space on all sources,
+            // only continue execution when input was consumed;
+            // otherwise this may result in busy-poll
+            TBase::ContinueExecute(*lastPollResult);
+        }
     }
 
     void DoTerminateImpl() override {
@@ -55,7 +64,7 @@ protected:
         }
     }
 
-    bool DoHandleChannelsAfterFinishImpl() override final{ 
+    bool DoHandleChannelsAfterFinishImpl() override final{
         Y_ABORT_UNLESS(this->Checkpoints);
 
         if (this->Checkpoints->HasPendingCheckpoint() && !this->Checkpoints->ComputeActorStateSaved() && ReadyToCheckpoint()) {
@@ -81,7 +90,7 @@ protected: //TDqComputeActorChannels::ICalbacks
 
         auto channel = inputChannel->Channel;
 
-        if (channelData.RowCount()) {
+        if (channelData.ChunkCount()) {
             TDqSerializedBatch batch;
             batch.Proto = std::move(*channelData.Proto.MutableData());
             batch.Payload = std::move(channelData.Payload);
@@ -210,11 +219,11 @@ protected:
             limits.OutputChunkMaxSize = GetDqExecutionSettings().FlowControl.MaxOutputChunkSize;
 	}
 
-        TaskRunner->Prepare(this->Task, limits, execCtx);
-
         if (this->Task.GetEnableSpilling()) {
-            TaskRunner->SetSpillerFactory(std::make_shared<TDqSpillerFactory>(execCtx.GetTxId(), NActors::TActivationContext::ActorSystem(), execCtx.GetWakeupCallback()));
+            TaskRunner->SetSpillerFactory(std::make_shared<TDqSpillerFactory>(execCtx.GetTxId(), NActors::TActivationContext::ActorSystem(), execCtx.GetWakeupCallback(), execCtx.GetErrorCallback()));
         }
+
+        TaskRunner->Prepare(this->Task, limits, execCtx);
 
         for (auto& [channelId, channel] : this->InputChannelsMap) {
             channel.Channel = TaskRunner->GetInputChannel(channelId);

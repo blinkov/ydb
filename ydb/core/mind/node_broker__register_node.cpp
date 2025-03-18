@@ -2,6 +2,7 @@
 #include "node_broker__scheme.h"
 
 #include <ydb/core/base/appdata.h>
+#include <ydb/core/protos/counters_node_broker.pb.h>
 
 namespace NKikimr {
 namespace NNodeBroker {
@@ -20,6 +21,8 @@ public:
         , FixNodeId(false)
     {
     }
+
+    TTxType GetTxType() const override { return TXTYPE_REGISTER_NODE; }
 
     bool Error(TStatus::ECode code,
                const TString &reason,
@@ -57,7 +60,7 @@ public:
 
         if (rec.HasPath() && ScopeId == NActors::TScopeId()) {
             return Error(TStatus::ERROR,
-                         TStringBuilder() << "Cannot resolve scope id for path " << rec.GetPath(),
+                         TStringBuilder() << "Failed to resolve the database by its path. Perhaps the database " << rec.GetPath() << " does not exist",
                          ctx);
         }
 
@@ -97,8 +100,11 @@ public:
                 Self->DbUpdateNodeLease(node, txc);
                 ExtendLease = true;
             }
-            node.AuthorizedByCertificate = rec.GetAuthorizedByCertificate();
-            
+            if (node.AuthorizedByCertificate != rec.GetAuthorizedByCertificate()) {
+                node.AuthorizedByCertificate = rec.GetAuthorizedByCertificate();
+                Self->DbUpdateNodeAuthorizedByCertificate(node, txc);
+            }
+
             if (Self->EnableStableNodeNames) {
                 if (ServicedSubDomain != node.ServicedSubDomain) {
                     if (node.SlotIndex.has_value()) {
@@ -107,12 +113,12 @@ public:
                     node.ServicedSubDomain = ServicedSubDomain;
                     node.SlotIndex = Self->SlotIndexesPools[node.ServicedSubDomain].AcquireLowestFreeIndex();
                     Self->DbAddNode(node, txc);
-                } else if (!node.SlotIndex.has_value()) {    
+                } else if (!node.SlotIndex.has_value()) {
                     node.SlotIndex = Self->SlotIndexesPools[node.ServicedSubDomain].AcquireLowestFreeIndex();
                     Self->DbAddNode(node, txc);
                 }
             }
-            
+
             Response->Record.MutableStatus()->SetCode(TStatus::OK);
             Self->FillNodeInfo(node, *Response->Record.MutableNode());
 

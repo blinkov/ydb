@@ -14,9 +14,10 @@
 #include <ydb/core/blobstorage/base/blobstorage_events.h>
 #include <ydb/core/blobstorage/base/transparent.h>
 #include <ydb/core/blobstorage/backpressure/queue_backpressure_client.h>
+#include <ydb/core/blobstorage/common/immediate_control_defaults.h>
 #include <ydb/library/actors/core/interconnect.h>
 #include <ydb/library/actors/wilson/wilson_span.h>
-#include <ydb/core/base/appdata.h>
+#include <ydb/core/base/appdata_fwd.h>
 #include <ydb/core/base/group_stat.h>
 #include <ydb/library/wilson_ids/wilson.h>
 #include <library/cpp/containers/stack_vector/stack_vec.h>
@@ -29,7 +30,7 @@ LWTRACE_USING(BLOBSTORAGE_PROVIDER);
 constexpr ui32 TypicalPartsInBlob = 6;
 constexpr ui32 TypicalDisksInSubring = 8;
 
-constexpr ui32 MaxBatchedPutSize = 64 * 1024 - 512 - 5; // (MinREALHugeBlobInBytes - 1 - TDiskBlob::HugeBlobOverhead) for ssd and nvme
+constexpr ui32 MaxBatchedPutSize = 64 * 1024 - 512 - 5; // (MinHugeBlobInBytes - 1 - TDiskBlob::HugeBlobOverhead) for ssd and nvme
 
 const TDuration ProxyConfigurationTimeout = TDuration::Seconds(20);
 const ui32 ProxyRetryConfigurationInitialTimeout = 200;
@@ -51,9 +52,6 @@ const ui32 BeginRequestSize = 10;
 const ui32 MaxRequestSize = 1000;
 
 const ui32 MaskSizeBits = 32;
-
-constexpr bool DefaultEnablePutBatching = true;
-constexpr bool DefaultEnableVPatch = false;
 
 constexpr bool WithMovingPatchRequestToStaticNode = true;
 
@@ -93,24 +91,6 @@ struct TEvLatencyReport : public TEventLocal<TEvLatencyReport, TEvBlobStorage::E
     {}
 };
 
-struct TNodeLayoutInfo : TThrRefBase {
-    // indexed by NodeId
-    TNodeLocation SelfLocation;
-    TVector<TNodeLocation> LocationPerOrderNumber;
-
-    TNodeLayoutInfo(const TNodeLocation& selfLocation, const TIntrusivePtr<TBlobStorageGroupInfo>& info,
-            std::unordered_map<ui32, TNodeLocation>& map)
-        : SelfLocation(selfLocation)
-        , LocationPerOrderNumber(info->GetTotalVDisksNum())
-    {
-        for (ui32 i = 0; i < LocationPerOrderNumber.size(); ++i) {
-            LocationPerOrderNumber[i] = map[info->GetActorId(i).NodeId()];
-        }
-    }
-};
-
-using TNodeLayoutInfoPtr = TIntrusivePtr<TNodeLayoutInfo>;
-
 inline TStoragePoolCounters::EHandleClass HandleClassToHandleClass(NKikimrBlobStorage::EGetHandleClass handleClass) {
     switch (handleClass) {
         case NKikimrBlobStorage::FastRead:
@@ -145,6 +125,7 @@ NActors::NLog::EPriority PriorityForStatusInbound(NKikimrProto::EReplyStatus sta
     XX(TEvBlobStorage::TEvPut) \
     XX(TEvBlobStorage::TEvGet) \
     XX(TEvBlobStorage::TEvBlock) \
+    XX(TEvBlobStorage::TEvGetBlock) \
     XX(TEvBlobStorage::TEvDiscover) \
     XX(TEvBlobStorage::TEvRange) \
     XX(TEvBlobStorage::TEvCollectGarbage) \
@@ -188,30 +169,56 @@ inline void SetExecutionRelay(IEventBase& ev, std::shared_ptr<TEvBlobStorage::TE
     }
 }
 
+struct TAccelerationParams {
+    double SlowDiskThreshold = DefaultSlowDiskThreshold;
+    double PredictedDelayMultiplier = DefaultPredictedDelayMultiplier;
+    ui32 MaxNumOfSlowDisks = DefaultMaxNumOfSlowDisks;
+};
+
 class TBlobStorageGroupRequestActor : public TActor<TBlobStorageGroupRequestActor> {
 public:
     template<typename TEv>
-    TBlobStorageGroupRequestActor(TIntrusivePtr<TBlobStorageGroupInfo> info, TIntrusivePtr<TGroupQueues> groupQueues,
-            TIntrusivePtr<TBlobStorageGroupProxyMon> mon, const TActorId& source, ui64 cookie,
-            NKikimrServices::EServiceKikimr logComponent, bool logAccEnabled, TMaybe<TGroupStat::EKind> latencyQueueKind,
-            TInstant now, TIntrusivePtr<TStoragePoolCounters> &storagePoolCounters, ui32 restartCounter,
-            NWilson::TTraceId&& traceId, const char *name, const TEv *event,
-            std::shared_ptr<TEvBlobStorage::TExecutionRelay> executionRelay, NKikimrServices::TActivity::EType activity)
-        : TActor(&TThis::InitialStateFunc, activity)
-        , Info(std::move(info))
-        , GroupQueues(std::move(groupQueues))
-        , Mon(std::move(mon))
-        , PoolCounters(storagePoolCounters)
-        , LogCtx(logComponent, logAccEnabled)
-        , ParentSpan(TWilson::BlobStorage, std::move(traceId), name)
-        , RestartCounter(restartCounter)
+    struct TCommonParameters {
+        TIntrusivePtr<TBlobStorageGroupInfo> GroupInfo;
+        TIntrusivePtr<TGroupQueues> GroupQueues;
+        TIntrusivePtr<TBlobStorageGroupProxyMon> Mon;
+        TActorId Source = TActorId{};
+        ui64 Cookie = 0;
+        TMonotonic Now;
+        TIntrusivePtr<TStoragePoolCounters>& StoragePoolCounters;
+        ui32 RestartCounter;
+        NWilson::TTraceId TraceId = {};
+        TEv* Event = nullptr;
+        std::shared_ptr<TEvBlobStorage::TExecutionRelay> ExecutionRelay = nullptr;
+
+        bool LogAccEnabled = false;
+        TMaybe<TGroupStat::EKind> LatencyQueueKind = {};
+    };
+
+    struct TTypeSpecificParameters {
+        NKikimrServices::EServiceKikimr LogComponent;
+        const char* Name;
+        NKikimrServices::TActivity::EType Activity;
+    };
+
+public:
+    template<typename TGroupRequestParameters>
+    TBlobStorageGroupRequestActor(TGroupRequestParameters& params)
+        : TActor(&TThis::InitialStateFunc, params.TypeSpecific.Activity)
+        , Info(std::move(params.Common.GroupInfo))
+        , GroupQueues(std::move(params.Common.GroupQueues))
+        , Mon(std::move(params.Common.Mon))
+        , PoolCounters(params.Common.StoragePoolCounters)
+        , LogCtx(params.TypeSpecific.LogComponent, params.Common.LogAccEnabled)
+        , ParentSpan(TWilson::BlobStorage, std::move(params.Common.TraceId), params.TypeSpecific.Name)
+        , RestartCounter(params.Common.RestartCounter)
         , CostModel(GroupQueues->CostModel)
-        , Source(source)
-        , Cookie(cookie)
-        , LatencyQueueKind(latencyQueueKind)
-        , RequestStartTime(now)
+        , RequestStartTime(params.Common.Now)
+        , Source(params.Common.Source)
+        , Cookie(params.Common.Cookie)
+        , LatencyQueueKind(params.Common.LatencyQueueKind)
         , RacingDomains(&Info->GetTopology())
-        , ExecutionRelay(std::move(executionRelay))
+        , ExecutionRelay(std::move(params.Common.ExecutionRelay))
     {
         if (ParentSpan) {
             const NWilson::TTraceId& parentTraceId = ParentSpan.GetTraceId();
@@ -220,7 +227,7 @@ public:
             ParentSpan.Link(Span.GetTraceId());
             Span.Attribute("GroupId", Info->GroupID.GetRawId());
             Span.Attribute("RestartCounter", RestartCounter);
-            event->ToSpan(Span);
+            params.Common.Event->ToSpan(Span);
         }
 
         Y_ABORT_UNLESS(CostModel);
@@ -295,6 +302,7 @@ protected:
     bool Dead = false;
     const ui32 RestartCounter = 0;
     std::shared_ptr<const TCostModel> CostModel;
+    const TMonotonic RequestStartTime;
 
 private:
     const TActorId Source;
@@ -303,13 +311,13 @@ private:
     ui32 RequestsInFlight = 0;
     std::unique_ptr<IEventBase> Response;
     const TMaybe<TGroupStat::EKind> LatencyQueueKind;
-    const TInstant RequestStartTime;
     THPTimer Timer;
     std::deque<std::unique_ptr<IEventHandle>> PostponedQ;
     TBlobStorageGroupInfo::TGroupFailDomains RacingDomains; // a set of domains we've received RACE from
     TActorId ProxyActorId;
     std::shared_ptr<TEvBlobStorage::TExecutionRelay> ExecutionRelay;
     bool ExecutionRelayUsed = false;
+    bool FirstResponse = true;
 };
 
 void Encrypt(char *destination, const char *source, size_t shift, size_t sizeBytes, const TLogoBlobID &id,
@@ -321,101 +329,209 @@ void Decrypt(char *destination, const char *source, size_t shift, size_t sizeByt
         const TBlobStorageGroupInfo &info);
 void DecryptInplace(TRope& rope, ui32 offset, ui32 shift, ui32 size, const TLogoBlobID& id, const TBlobStorageGroupInfo& info);
 
-IActor* CreateBlobStorageGroupRangeRequest(const TIntrusivePtr<TBlobStorageGroupInfo> &info,
-    const TIntrusivePtr<TGroupQueues> &state, const TActorId &source,
-    const TIntrusivePtr<TBlobStorageGroupProxyMon> &mon, TEvBlobStorage::TEvRange *ev,
-    ui64 cookie, NWilson::TTraceId traceId, TInstant now, TIntrusivePtr<TStoragePoolCounters> &storagePoolCounters);
+struct TBlobStorageGroupRangeParameters {
+    TBlobStorageGroupRequestActor::TCommonParameters<TEvBlobStorage::TEvRange> Common;
+    TBlobStorageGroupRequestActor::TTypeSpecificParameters TypeSpecific = {
+        .LogComponent = NKikimrServices::BS_PROXY_RANGE,
+        .Name = "DSProxy.Range",
+        .Activity = NKikimrServices::TActivity::BS_GROUP_RANGE,
+    };
+};
+IActor* CreateBlobStorageGroupRangeRequest(TBlobStorageGroupRangeParameters params);
 
-IActor* CreateBlobStorageGroupPutRequest(const TIntrusivePtr<TBlobStorageGroupInfo> &info,
-    const TIntrusivePtr<TGroupQueues> &state, const TActorId &source,
-    const TIntrusivePtr<TBlobStorageGroupProxyMon> &mon, TEvBlobStorage::TEvPut *ev,
-    ui64 cookie, NWilson::TTraceId traceId, bool timeStatsEnabled,
-    TDiskResponsivenessTracker::TPerDiskStatsPtr stats,
-    TMaybe<TGroupStat::EKind> latencyQueueKind, TInstant now, TIntrusivePtr<TStoragePoolCounters> &storagePoolCounters,
-    bool enableRequestMod3x3ForMinLatecy);
+struct TBlobStorageGroupPutParameters {
+    TBlobStorageGroupRequestActor::TCommonParameters<TEvBlobStorage::TEvPut> Common;
+    TBlobStorageGroupRequestActor::TTypeSpecificParameters TypeSpecific = {
+        .LogComponent = NKikimrServices::BS_PROXY_PUT,
+        .Name = "DSProxy.Put",
+        .Activity = NKikimrServices::TActivity::BS_PROXY_PUT_ACTOR,
+    };
+    bool TimeStatsEnabled;
+    TDiskResponsivenessTracker::TPerDiskStatsPtr Stats;
+    bool EnableRequestMod3x3ForMinLatency;
+    TAccelerationParams AccelerationParams;
+    TDuration LongRequestThreshold;
+};
+IActor* CreateBlobStorageGroupPutRequest(TBlobStorageGroupPutParameters params);
 
-IActor* CreateBlobStorageGroupPutRequest(const TIntrusivePtr<TBlobStorageGroupInfo> &info,
-    const TIntrusivePtr<TGroupQueues> &state,
-    const TIntrusivePtr<TBlobStorageGroupProxyMon> &mon,
-    TBatchedVec<TEvBlobStorage::TEvPut::TPtr> &ev,
-    bool timeStatsEnabled,
-    TDiskResponsivenessTracker::TPerDiskStatsPtr stats,
-    TMaybe<TGroupStat::EKind> latencyQueueKind, TInstant now, TIntrusivePtr<TStoragePoolCounters> &storagePoolCounters,
-    NKikimrBlobStorage::EPutHandleClass handleClass, TEvBlobStorage::TEvPut::ETactic tactic,
-    bool enableRequestMod3x3ForMinLatecy);
+struct TBlobStorageGroupMultiPutParameters {
+    TBlobStorageGroupRequestActor::TCommonParameters<TEvBlobStorage::TEvPut> Common;
+    TBlobStorageGroupRequestActor::TTypeSpecificParameters TypeSpecific = {
+        .LogComponent = NKikimrServices::BS_PROXY_PUT,
+        .Name = "DSProxy.Put",
+        .Activity = NKikimrServices::TActivity::BS_PROXY_PUT_ACTOR,
+    };
 
-IActor* CreateBlobStorageGroupGetRequest(const TIntrusivePtr<TBlobStorageGroupInfo> &info,
-    const TIntrusivePtr<TGroupQueues> &state, const TActorId &source,
-    const TIntrusivePtr<TBlobStorageGroupProxyMon> &mon, TEvBlobStorage::TEvGet *ev,
-    ui64 cookie, NWilson::TTraceId traceId, TNodeLayoutInfoPtr&& nodeLayout,
-    TMaybe<TGroupStat::EKind> latencyQueueKind, TInstant now, TIntrusivePtr<TStoragePoolCounters> &storagePoolCounters);
+    TBatchedVec<TEvBlobStorage::TEvPut::TPtr>& Events;
+    bool TimeStatsEnabled;
+    TDiskResponsivenessTracker::TPerDiskStatsPtr Stats;
+    NKikimrBlobStorage::EPutHandleClass HandleClass;
+    TEvBlobStorage::TEvPut::ETactic Tactic;
+    bool EnableRequestMod3x3ForMinLatency;
+    TAccelerationParams AccelerationParams;
+    TDuration LongRequestThreshold;
 
-IActor* CreateBlobStorageGroupPatchRequest(const TIntrusivePtr<TBlobStorageGroupInfo> &info,
-    const TIntrusivePtr<TGroupQueues> &state, const TActorId &source,
-    const TIntrusivePtr<TBlobStorageGroupProxyMon> &mon, TEvBlobStorage::TEvPatch *ev,
-    ui64 cookie, NWilson::TTraceId traceId, TInstant now, TIntrusivePtr<TStoragePoolCounters> &storagePoolCounters,
-    bool useVPatch);
+    static ui32 CalculateRestartCounter(TBatchedVec<TEvBlobStorage::TEvPut::TPtr>& events) {
+        ui32 maxRestarts = 0;
+        for (const auto& ev : events) {
+            maxRestarts = std::max(maxRestarts, ev->Get()->RestartCounter);
+        }
+        return maxRestarts;
+    }
+};
+IActor* CreateBlobStorageGroupPutRequest(TBlobStorageGroupMultiPutParameters params);
 
-IActor* CreateBlobStorageGroupMultiGetRequest(const TIntrusivePtr<TBlobStorageGroupInfo> &info,
-    const TIntrusivePtr<TGroupQueues> &state, const TActorId &source,
-    const TIntrusivePtr<TBlobStorageGroupProxyMon> &mon, TEvBlobStorage::TEvGet *ev,
-    ui64 cookie, NWilson::TTraceId traceId, TMaybe<TGroupStat::EKind> latencyQueueKind,
-    TInstant now, TIntrusivePtr<TStoragePoolCounters> &storagePoolCounters);
+struct TBlobStorageGroupGetParameters {
+    TBlobStorageGroupRequestActor::TCommonParameters<TEvBlobStorage::TEvGet> Common;
+    TBlobStorageGroupRequestActor::TTypeSpecificParameters TypeSpecific = {
+        .LogComponent = NKikimrServices::BS_PROXY_GET,
+        .Name = "DSProxy.Get",
+        .Activity = NKikimrServices::TActivity::BS_PROXY_GET_ACTOR,
+    };
+    TNodeLayoutInfoPtr NodeLayout;
+    TAccelerationParams AccelerationParams;
+    TDuration LongRequestThreshold;
+};
+IActor* CreateBlobStorageGroupGetRequest(TBlobStorageGroupGetParameters params);
 
-IActor* CreateBlobStorageGroupIndexRestoreGetRequest(const TIntrusivePtr<TBlobStorageGroupInfo> &info,
-    const TIntrusivePtr<TGroupQueues> &state, const TActorId &source,
-    const TIntrusivePtr<TBlobStorageGroupProxyMon> &mon, TEvBlobStorage::TEvGet *ev,
-    ui64 cookie, NWilson::TTraceId traceId, TMaybe<TGroupStat::EKind> latencyQueueKind,
-    TInstant now, TIntrusivePtr<TStoragePoolCounters> &storagePoolCounters);
+struct TBlobStorageGroupPatchParameters {
+    TBlobStorageGroupRequestActor::TCommonParameters<TEvBlobStorage::TEvPatch> Common;
+    TBlobStorageGroupRequestActor::TTypeSpecificParameters TypeSpecific = {
+        .LogComponent = NKikimrServices::BS_PROXY_PATCH,
+        .Name = "DSProxy.Patch",
+        .Activity = NKikimrServices::TActivity::BS_PROXY_PATCH_ACTOR,
+    };
 
-IActor* CreateBlobStorageGroupDiscoverRequest(const TIntrusivePtr<TBlobStorageGroupInfo> &info,
-    const TIntrusivePtr<TGroupQueues> &state, const TActorId &source,
-    const TIntrusivePtr<TBlobStorageGroupProxyMon> &mon, TEvBlobStorage::TEvDiscover *ev,
-    ui64 cookie, NWilson::TTraceId traceId, TInstant now, TIntrusivePtr<TStoragePoolCounters> &storagePoolCounters);
+    bool UseVPatch = false;
+};
+IActor* CreateBlobStorageGroupPatchRequest(TBlobStorageGroupPatchParameters params);
 
-IActor* CreateBlobStorageGroupMirror3dcDiscoverRequest(const TIntrusivePtr<TBlobStorageGroupInfo> &info,
-    const TIntrusivePtr<TGroupQueues> &state, const TActorId &source,
-    const TIntrusivePtr<TBlobStorageGroupProxyMon> &mon, TEvBlobStorage::TEvDiscover *ev,
-    ui64 cookie, NWilson::TTraceId traceId, TInstant now, TIntrusivePtr<TStoragePoolCounters> &storagePoolCounters);
+struct TBlobStorageGroupMultiGetParameters {
+    TBlobStorageGroupRequestActor::TCommonParameters<TEvBlobStorage::TEvGet> Common;
+    TBlobStorageGroupRequestActor::TTypeSpecificParameters TypeSpecific = {
+        .LogComponent = NKikimrServices::BS_PROXY_MULTIGET,
+        .Name = "DSProxy.MultiGet",
+        .Activity = NKikimrServices::TActivity::BS_PROXY_MULTIGET_ACTOR,
+    };
+    bool UseVPatch = false;
+};
+IActor* CreateBlobStorageGroupMultiGetRequest(TBlobStorageGroupMultiGetParameters params);
 
-IActor* CreateBlobStorageGroupMirror3of4DiscoverRequest(const TIntrusivePtr<TBlobStorageGroupInfo> &info,
-    const TIntrusivePtr<TGroupQueues> &state, const TActorId &source,
-    const TIntrusivePtr<TBlobStorageGroupProxyMon> &mon, TEvBlobStorage::TEvDiscover *ev,
-    ui64 cookie, NWilson::TTraceId traceId, TInstant now, TIntrusivePtr<TStoragePoolCounters> &storagePoolCounters);
+struct TBlobStorageGroupRestoreGetParameters {
+    TBlobStorageGroupRequestActor::TCommonParameters<TEvBlobStorage::TEvGet> Common;
+    TBlobStorageGroupRequestActor::TTypeSpecificParameters TypeSpecific = {
+        .LogComponent = NKikimrServices::BS_PROXY_INDEXRESTOREGET,
+        .Name = "DSProxy.IndexRestoreGet",
+        .Activity = NKikimrServices::TActivity::BS_PROXY_INDEXRESTOREGET_ACTOR,
+    };
+};
+IActor* CreateBlobStorageGroupIndexRestoreGetRequest(TBlobStorageGroupRestoreGetParameters params);
 
-IActor* CreateBlobStorageGroupCollectGarbageRequest(const TIntrusivePtr<TBlobStorageGroupInfo> &info,
-    const TIntrusivePtr<TGroupQueues> &state, const TActorId &source,
-    const TIntrusivePtr<TBlobStorageGroupProxyMon> &mon, TEvBlobStorage::TEvCollectGarbage *ev,
-    ui64 cookie, NWilson::TTraceId traceId, TInstant now, TIntrusivePtr<TStoragePoolCounters> &storagePoolCounters);
+struct TBlobStorageGroupDiscoverParameters {
+    TBlobStorageGroupRequestActor::TCommonParameters<TEvBlobStorage::TEvDiscover> Common;
+    TBlobStorageGroupRequestActor::TTypeSpecificParameters TypeSpecific = {
+        .LogComponent = NKikimrServices::BS_PROXY_DISCOVER,
+        .Name = "DSProxy.Discover",
+        .Activity = NKikimrServices::TActivity::BS_GROUP_DISCOVER,
+    };
+};
+IActor* CreateBlobStorageGroupDiscoverRequest(TBlobStorageGroupDiscoverParameters params);
+IActor* CreateBlobStorageGroupMirror3dcDiscoverRequest(TBlobStorageGroupDiscoverParameters params);
+IActor* CreateBlobStorageGroupMirror3of4DiscoverRequest(TBlobStorageGroupDiscoverParameters params);
 
-IActor* CreateBlobStorageGroupMultiCollectRequest(const TIntrusivePtr<TBlobStorageGroupInfo> &info,
-    const TIntrusivePtr<TGroupQueues> &state, const TActorId &source,
-    const TIntrusivePtr<TBlobStorageGroupProxyMon> &mon, TEvBlobStorage::TEvCollectGarbage *ev,
-    ui64 cookie, NWilson::TTraceId traceId, TInstant now, TIntrusivePtr<TStoragePoolCounters> &storagePoolCounters);
+struct TBlobStorageGroupCollectGarbageParameters {
+    TBlobStorageGroupRequestActor::TCommonParameters<TEvBlobStorage::TEvCollectGarbage> Common;
+    TBlobStorageGroupRequestActor::TTypeSpecificParameters TypeSpecific = {
+        .LogComponent = NKikimrServices::BS_PROXY_COLLECT,
+        .Name = "DSProxy.CollectGarbage",
+        .Activity = NKikimrServices::TActivity::BS_GROUP_COLLECT_GARBAGE,
+    };
+};
+IActor* CreateBlobStorageGroupCollectGarbageRequest(TBlobStorageGroupCollectGarbageParameters params);
 
-IActor* CreateBlobStorageGroupBlockRequest(const TIntrusivePtr<TBlobStorageGroupInfo> &info,
-    const TIntrusivePtr<TGroupQueues> &state, const TActorId &source,
-    const TIntrusivePtr<TBlobStorageGroupProxyMon> &mon, TEvBlobStorage::TEvBlock *ev,
-    ui64 cookie, NWilson::TTraceId traceId, TInstant now, TIntrusivePtr<TStoragePoolCounters> &storagePoolCounters);
+struct TBlobStorageGroupMultiCollectParameters {
+    TBlobStorageGroupRequestActor::TCommonParameters<TEvBlobStorage::TEvCollectGarbage> Common;
+    TBlobStorageGroupRequestActor::TTypeSpecificParameters TypeSpecific = {
+        .LogComponent = NKikimrServices::BS_PROXY_MULTICOLLECT,
+        .Name = "DSProxy.MultiCollect",
+        .Activity = NKikimrServices::TActivity::BS_PROXY_MULTICOLLECT_ACTOR,
+    };
+};
+IActor* CreateBlobStorageGroupMultiCollectRequest(TBlobStorageGroupMultiCollectParameters params);
 
-IActor* CreateBlobStorageGroupStatusRequest(const TIntrusivePtr<TBlobStorageGroupInfo> &info,
-    const TIntrusivePtr<TGroupQueues> &state, const TActorId &source,
-    const TIntrusivePtr<TBlobStorageGroupProxyMon> &mon, TEvBlobStorage::TEvStatus *ev,
-    ui64 cookie, NWilson::TTraceId traceId, TInstant now, TIntrusivePtr<TStoragePoolCounters> &storagePoolCounters);
+struct TBlobStorageGroupBlockParameters {
+    TBlobStorageGroupRequestActor::TCommonParameters<TEvBlobStorage::TEvBlock> Common;
+    TBlobStorageGroupRequestActor::TTypeSpecificParameters TypeSpecific = {
+        .LogComponent = NKikimrServices::BS_PROXY_BLOCK,
+        .Name = "DSProxy.Block",
+        .Activity = NKikimrServices::TActivity::BS_GROUP_BLOCK,
+    };
+};
+IActor* CreateBlobStorageGroupBlockRequest(TBlobStorageGroupBlockParameters params);
 
-IActor* CreateBlobStorageGroupAssimilateRequest(const TIntrusivePtr<TBlobStorageGroupInfo>& info,
-    const TIntrusivePtr<TGroupQueues>& state, const TActorId& source,
-    const TIntrusivePtr<TBlobStorageGroupProxyMon>& mon, TEvBlobStorage::TEvAssimilate *ev,
-    ui64 cookie, NWilson::TTraceId traceId, TInstant now, TIntrusivePtr<TStoragePoolCounters>& storagePoolCounters);
+struct TBlobStorageGroupGetBlockParameters {
+    TBlobStorageGroupRequestActor::TCommonParameters<TEvBlobStorage::TEvGetBlock> Common;
+    TBlobStorageGroupRequestActor::TTypeSpecificParameters TypeSpecific = {
+        .LogComponent = NKikimrServices::BS_PROXY_GETBLOCK,
+        .Name = "DSProxy.GetBlock",
+        .Activity = NKikimrServices::TActivity::BS_GROUP_GETBLOCK,
+    };
+};
+IActor* CreateBlobStorageGroupGetBlockRequest(TBlobStorageGroupGetBlockParameters params);
+
+struct TBlobStorageGroupStatusParameters {
+    TBlobStorageGroupRequestActor::TCommonParameters<TEvBlobStorage::TEvStatus> Common;
+    TBlobStorageGroupRequestActor::TTypeSpecificParameters TypeSpecific = {
+        .LogComponent = NKikimrServices::BS_PROXY_STATUS,
+        .Name = "DSProxy.Status",
+        .Activity = NKikimrServices::TActivity::BS_PROXY_STATUS_ACTOR,
+    };
+};
+IActor* CreateBlobStorageGroupStatusRequest(TBlobStorageGroupStatusParameters params);
+
+struct TBlobStorageGroupAssimilateParameters {
+    TBlobStorageGroupRequestActor::TCommonParameters<TEvBlobStorage::TEvAssimilate> Common;
+    TBlobStorageGroupRequestActor::TTypeSpecificParameters TypeSpecific = {
+        .LogComponent = NKikimrServices::BS_PROXY_ASSIMILATE,
+        .Name = "DSProxy.Assimilate",
+        .Activity = NKikimrServices::TActivity::BS_GROUP_ASSIMILATE,
+    };
+};
+IActor* CreateBlobStorageGroupAssimilateRequest(TBlobStorageGroupAssimilateParameters params);
 
 IActor* CreateBlobStorageGroupEjectedProxy(ui32 groupId, TIntrusivePtr<TDsProxyNodeMon> &nodeMon);
 
-IActor* CreateBlobStorageGroupProxyConfigured(TIntrusivePtr<TBlobStorageGroupInfo>&& info,
+struct TBlobStorageProxyControlWrappers {
+    TMemorizableControlWrapper EnablePutBatching;
+    TMemorizableControlWrapper EnableVPatch;
+
+    TMemorizableControlWrapper LongRequestThresholdMs = LongRequestThresholdDefaultControl;
+
+#define DEVICE_TYPE_SEPECIFIC_MEMORIZABLE_CONTROLS(prefix)              \
+    TMemorizableControlWrapper prefix = prefix##DefaultControl;         \
+    TMemorizableControlWrapper prefix##HDD = prefix##DefaultControl;    \
+    TMemorizableControlWrapper prefix##SSD = prefix##DefaultControl
+
+    // Acceleration parameters
+    DEVICE_TYPE_SEPECIFIC_MEMORIZABLE_CONTROLS(SlowDiskThreshold);
+    DEVICE_TYPE_SEPECIFIC_MEMORIZABLE_CONTROLS(PredictedDelayMultiplier);
+    DEVICE_TYPE_SEPECIFIC_MEMORIZABLE_CONTROLS(MaxNumOfSlowDisks);
+
+#undef DEVICE_TYPE_SEPECIFIC_MEMORIZABLE_CONTROLS
+
+};
+
+struct TBlobStorageProxyParameters {
+    bool UseActorSystemTimeInBSQueue = false;
+
+    TBlobStorageProxyControlWrappers Controls;
+};
+
+IActor* CreateBlobStorageGroupProxyConfigured(TIntrusivePtr<TBlobStorageGroupInfo>&& info, TNodeLayoutInfoPtr nodeLayoutInfo,
     bool forceWaitAllDrives, TIntrusivePtr<TDsProxyNodeMon> &nodeMon,
-    TIntrusivePtr<TStoragePoolCounters>&& storagePoolCounters, const TControlWrapper &enablePutBatching,
-    const TControlWrapper &enableVPatch);
+    TIntrusivePtr<TStoragePoolCounters>&& storagePoolCounters, const TBlobStorageProxyParameters& params);
 
 IActor* CreateBlobStorageGroupProxyUnconfigured(ui32 groupId, TIntrusivePtr<TDsProxyNodeMon> &nodeMon,
-    const TControlWrapper &enablePutBatching, const TControlWrapper &enableVPatch);
+    const TBlobStorageProxyParameters& params);
 
 }//NKikimr

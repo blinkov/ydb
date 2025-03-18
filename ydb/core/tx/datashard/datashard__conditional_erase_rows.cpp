@@ -12,6 +12,7 @@
 #include <util/generic/vector.h>
 #include <util/stream/output.h>
 #include <util/string/builder.h>
+#include <yql/essentials/parser/pg_wrapper/postgresql/src/backend/catalog/pg_type_d.h>
 
 namespace NKikimr {
 namespace NDataShard {
@@ -229,14 +230,14 @@ public:
     {
     }
 
-    void Describe(IOutputStream& o) const noexcept override {
+    void Describe(IOutputStream& o) const override {
         o << "CondEraseScan {"
           << " TableId: " << TableId
           << " TxId: " << TxId
         << " }";
     }
 
-    IScan::TInitialState Prepare(IDriver* driver, TIntrusiveConstPtr<TScheme> scheme) noexcept override {
+    IScan::TInitialState Prepare(IDriver* driver, TIntrusiveConstPtr<TScheme> scheme) override {
         TlsActivationContext->AsActorContext().RegisterWithSameMailbox(this);
 
         Driver = driver;
@@ -272,12 +273,12 @@ public:
         sys->Send(DataShard.ActorId, new TDataShard::TEvPrivate::TEvConditionalEraseRowsRegistered(TxId, SelfId()));
     }
 
-    EScan Seek(TLead& lead, ui64) noexcept override {
+    EScan Seek(TLead& lead, ui64) override {
         lead.To(ScanTags, {}, ESeek::Lower);
         return EScan::Feed;
     }
 
-    EScan Feed(TArrayRef<const TCell>, const TRow& row) noexcept override {
+    EScan Feed(TArrayRef<const TCell>, const TRow& row) override {
         Stats.IncProcessed();
         if (!Condition->Check(row)) {
             return EScan::Feed;
@@ -293,7 +294,7 @@ public:
         return EScan::Sleep;
     }
 
-    EScan Exhausted() noexcept override {
+    EScan Exhausted() override {
         NoMoreData = true;
 
         if (!SerializedKeys) {
@@ -304,7 +305,7 @@ public:
         return EScan::Sleep;
     }
 
-    TAutoPtr<IDestructable> Finish(EAbort abort) noexcept override {
+    TAutoPtr<IDestructable> Finish(EAbort abort) override {
         Reply(abort != EAbort::None);
         PassAway();
 
@@ -465,6 +466,31 @@ static TIndexes GetIndexes(const NKikimrTxDataShard::TEvConditionalEraseRowsRequ
     return result;
 }
 
+static bool CheckUnit(bool isDateType, NKikimrSchemeOp::TTTLSettings::EUnit unit, TString& error) {
+    switch (unit) {
+    case NKikimrSchemeOp::TTTLSettings::UNIT_SECONDS:
+    case NKikimrSchemeOp::TTTLSettings::UNIT_MILLISECONDS:
+    case NKikimrSchemeOp::TTTLSettings::UNIT_MICROSECONDS:
+    case NKikimrSchemeOp::TTTLSettings::UNIT_NANOSECONDS:
+        if (isDateType) {
+            error = "Unit cannot be specified for date type column";
+            return false;
+        } else {
+            return true;
+        }
+    case NKikimrSchemeOp::TTTLSettings::UNIT_AUTO:
+        if (isDateType) {
+            return true;
+        } else {
+            error = "Unit should be specified for integral type column";
+            return false;
+        }
+    default:
+        error = TStringBuilder() << "Unknown unit: " << static_cast<ui32>(unit);
+        return false;
+    }
+}
+
 static bool CheckUnit(NScheme::TTypeInfo type, NKikimrSchemeOp::TTTLSettings::EUnit unit, TString& error) {
     switch (type.GetTypeId()) {
     case NScheme::NTypeIds::Date:
@@ -473,29 +499,24 @@ static bool CheckUnit(NScheme::TTypeInfo type, NKikimrSchemeOp::TTTLSettings::EU
     case NScheme::NTypeIds::Date32:
     case NScheme::NTypeIds::Datetime64:
     case NScheme::NTypeIds::Timestamp64:
-        if (unit == NKikimrSchemeOp::TTTLSettings::UNIT_AUTO) {
-            return true;
-        } else {
-            error = "Unit cannot be specified for date type column";
-            return false;
-        }
-        break;
+        return CheckUnit(true, unit, error);
 
     case NScheme::NTypeIds::Uint32:
     case NScheme::NTypeIds::Uint64:
     case NScheme::NTypeIds::DyNumber:
-        switch (unit) {
-        case NKikimrSchemeOp::TTTLSettings::UNIT_SECONDS:
-        case NKikimrSchemeOp::TTTLSettings::UNIT_MILLISECONDS:
-        case NKikimrSchemeOp::TTTLSettings::UNIT_MICROSECONDS:
-        case NKikimrSchemeOp::TTTLSettings::UNIT_NANOSECONDS:
-            return true;
-        case NKikimrSchemeOp::TTTLSettings::UNIT_AUTO:
-            error = "Unit should be specified for integral type column";
-            return false;
-        default:
-            error = TStringBuilder() << "Unknown unit: " << static_cast<ui32>(unit);
-            return false;
+        return CheckUnit(false, unit, error);
+    
+    case NScheme::NTypeIds::Pg:
+        switch (NPg::PgTypeIdFromTypeDesc(type.GetPgTypeDesc())) {
+            case DATEOID:
+            case TIMESTAMPOID:
+                return CheckUnit(true, unit, error);
+            case INT4OID:
+            case INT8OID:
+                return CheckUnit(false, unit, error);
+            default:
+                error = "Unsupported PG type";
+                return false;
         }
         break;
 

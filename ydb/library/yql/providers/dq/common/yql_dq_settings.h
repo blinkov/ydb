@@ -1,9 +1,9 @@
 #pragma once
 
-#include <ydb/library/yql/providers/common/config/yql_dispatch.h>
-#include <ydb/library/yql/providers/common/config/yql_setting.h>
+#include <yql/essentials/providers/common/config/yql_dispatch.h>
+#include <yql/essentials/providers/common/config/yql_setting.h>
 
-#include <ydb/library/yql/core/yql_data_provider.h>
+#include <yql/essentials/core/yql_data_provider.h>
 #include <ydb/library/yql/dq/common/dq_common.h>
 #include <ydb/library/yql/dq/proto/dq_transport.pb.h>
 
@@ -15,6 +15,7 @@
 namespace NYql {
 
 struct TDqSettings {
+    friend struct TDqConfiguration;
 
     enum class ETaskRunnerStats {
         Disable,
@@ -26,11 +27,6 @@ struct TDqSettings {
     enum class ESpillingEngine {
         Disable     /* "disable" */,
         File        /* "file" */,
-    };
-
-    enum class EEnabledSpillingNodes : ui64 {
-        GraceJoin   = 1ULL      /* "GraceJoin" */,
-        All         = ~0ULL     /* "All" */,
     };
 
     struct TDefault {
@@ -61,8 +57,8 @@ struct TDqSettings {
         static constexpr bool ExportStats = false;
         static constexpr ETaskRunnerStats TaskRunnerStats = ETaskRunnerStats::Basic;
         static constexpr ESpillingEngine SpillingEngine = ESpillingEngine::Disable;
-        static constexpr ui32 CostBasedOptimizationLevel = 3;
-        static constexpr ui32 MaxDPccpDPTableSize = 40000U;
+        static constexpr ui32 CostBasedOptimizationLevel = 4;
+        static constexpr ui32 MaxDPHypDPTableSize = 40000U;
         static constexpr ui64 MaxAttachmentsSize = 2_GB;
         static constexpr bool SplitStageOnDqReplicate = true;
         static constexpr ui64 EnableSpillingNodes = 0;
@@ -94,7 +90,10 @@ struct TDqSettings {
     NCommon::TConfSetting<ui64, false> ChunkSizeLimit;
     NCommon::TConfSetting<NSize::TSize, false> MemoryLimit;
     NCommon::TConfSetting<ui64, false> _LiteralTimeout;
+private:
     NCommon::TConfSetting<ui64, false> _TableTimeout;
+    NCommon::TConfSetting<ui64, false> QueryTimeout; // less or equal than _TableTimeout
+public:
     NCommon::TConfSetting<ui64, false> _LongWorkersAllocationWarnTimeout;
     NCommon::TConfSetting<ui64, false> _LongWorkersAllocationFailTimeout;
     NCommon::TConfSetting<bool, false> EnableInsert;
@@ -143,6 +142,8 @@ struct TDqSettings {
 
     NCommon::TConfSetting<ui64, false> _MaxAttachmentsSize;
     NCommon::TConfSetting<bool, false> DisableCheckpoints;
+    NCommon::TConfSetting<bool, false> UseGraceJoinCoreForMap;
+    NCommon::TConfSetting<TString, false> Scheduler;
 
     // This options will be passed to executor_actor and worker_actor
     template <typename TProtoConfig>
@@ -171,6 +172,7 @@ struct TDqSettings {
         SAVE_SETTING(MemoryLimit);
         SAVE_SETTING(_LiteralTimeout);
         SAVE_SETTING(_TableTimeout);
+        SAVE_SETTING(QueryTimeout);
         SAVE_SETTING(_LongWorkersAllocationWarnTimeout);
         SAVE_SETTING(_LongWorkersAllocationFailTimeout);
         SAVE_SETTING(_AllResultsBytesLimit);
@@ -197,6 +199,7 @@ struct TDqSettings {
         SAVE_SETTING(SpillingEngine);
         SAVE_SETTING(EnableSpillingInChannels);
         SAVE_SETTING(DisableCheckpoints);
+        SAVE_SETTING(Scheduler);
 #undef SAVE_SETTING
     }
 
@@ -220,6 +223,15 @@ struct TDqSettings {
         } else {
             return fastPickle ? NDqProto::EDataTransportVersion::DATA_TRANSPORT_UV_FAST_PICKLE_1_0 : NDqProto::EDataTransportVersion::DATA_TRANSPORT_UV_PICKLE_1_0;
         }
+    }
+
+    ui64 GetQueryTimeout() const {
+        auto upper = _TableTimeout.Get().GetOrElse(TDefault::TableTimeout);
+        if (QueryTimeout.Get().Defined()) {
+            return Min(*QueryTimeout.Get(), upper);
+        }
+
+        return upper;
     }
 
     bool IsSpillingEngineEnabled() const {

@@ -11,6 +11,8 @@
 
 #include <google/protobuf/util/time_util.h>
 
+#include <util/string/builder.h>
+
 namespace NKikimr::NGRpcService {
 
 using namespace Ydb;
@@ -65,15 +67,20 @@ private:
 
         switch (record.GetStatus()) {
             case NKikimrScheme::StatusSuccess:
-                if (desc.GetSelf().GetPathType() != NKikimrSchemeOp::EPathTypeReplication) {
-                    auto issue = NYql::TIssue("Is not a replication");
-                    Request_->RaiseIssue(issue);
-                    return Reply(Ydb::StatusIds::SCHEME_ERROR, ctx);
+                switch (desc.GetSelf().GetPathType()) {
+                    case NKikimrSchemeOp::EPathTypeReplication:
+                    case NKikimrSchemeOp::EPathTypeTransfer:
+                        break;
+                    default: {
+                        auto issue = NYql::TIssue("Is not a replication");
+                        Request_->RaiseIssue(issue);
+                        return Reply(Ydb::StatusIds::SCHEME_ERROR, ctx);
+                    }
                 }
 
                 ConvertDirectoryEntry(desc.GetSelf(), Result.mutable_self(), true);
                 return DescribeReplication(desc.GetReplicationDescription().GetControllerId(),
-                    PathIdFromPathId(desc.GetReplicationDescription().GetPathId()));
+                    TPathId::FromProto(desc.GetReplicationDescription().GetPathId()));
 
             case NKikimrScheme::StatusPathDoesNotExist:
             case NKikimrScheme::StatusSchemeError:
@@ -101,7 +108,7 @@ private:
         }
 
         auto ev = std::make_unique<NReplication::TEvController::TEvDescribeReplication>();
-        PathIdFromPathId(pathId, ev->Record.MutablePathId());
+        pathId.ToProto(ev->Record.MutablePathId());
         ev->Record.SetIncludeStats(GetProtoRequest()->include_stats());
 
         NTabletPipe::SendData(SelfId(), ControllerPipeClient, ev.release());
@@ -129,6 +136,7 @@ private:
         }
 
         ConvertConnectionParams(record.GetConnectionParams(), *Result.mutable_connection_params());
+        ConvertConsistencySettings(record.GetConsistencySettings(), Result);
         ConvertState(*record.MutableState(), Result);
 
         for (const auto& target : record.GetTargets()) {
@@ -138,9 +146,18 @@ private:
         return ReplyWithResult(Ydb::StatusIds::SUCCESS, Result, ctx);
     }
 
+    static TString BuildConnectionString(const NKikimrReplication::TConnectionParams& params) {
+        return TStringBuilder()
+            << (params.GetEnableSsl() ? "grpcs://" : "grpc://")
+            << params.GetEndpoint()
+            << "/?database=" << params.GetDatabase();
+    }
+
     static void ConvertConnectionParams(const NKikimrReplication::TConnectionParams& from, Ydb::Replication::ConnectionParams& to) {
         to.set_endpoint(from.GetEndpoint());
         to.set_database(from.GetDatabase());
+        to.set_enable_ssl(from.GetEnableSsl());
+        to.set_connection_string(BuildConnectionString(from));
 
         switch (from.GetCredentialsCase()) {
         case NKikimrReplication::TConnectionParams::kStaticCredentials:
@@ -159,6 +176,26 @@ private:
 
     static void ConvertOAuth(const NKikimrReplication::TOAuthToken& from, Ydb::Replication::ConnectionParams::OAuth& to) {
         to.set_token_secret_name(from.GetTokenSecretName());
+    }
+
+    static void ConvertConsistencySettings(const NKikimrReplication::TConsistencySettings& from, Ydb::Replication::DescribeReplicationResult& to) {
+        switch (from.GetLevelCase()) {
+        case NKikimrReplication::TConsistencySettings::kRow:
+            return ConvertRowConsistencySettings(from.GetRow(), *to.mutable_row_consistency());
+        case NKikimrReplication::TConsistencySettings::kGlobal:
+            return ConvertGlobalConsistencySettings(from.GetGlobal(), *to.mutable_global_consistency());
+        default:
+            break;
+        }
+    }
+
+    static void ConvertRowConsistencySettings(const NKikimrReplication::TConsistencySettings::TRowConsistency&, Ydb::Replication::ConsistencyLevelRow&) {
+        // nop
+    }
+
+    static void ConvertGlobalConsistencySettings(const NKikimrReplication::TConsistencySettings::TGlobalConsistency& from, Ydb::Replication::ConsistencyLevelGlobal& to) {
+        *to.mutable_commit_interval() = google::protobuf::util::TimeUtil::MillisecondsToDuration(
+            from.GetCommitIntervalMilliSeconds());
     }
 
     static void ConvertItem(const NKikimrReplication::TReplicationConfig::TTargetSpecific::TTarget& from, Ydb::Replication::DescribeReplicationResult::Item& to) {

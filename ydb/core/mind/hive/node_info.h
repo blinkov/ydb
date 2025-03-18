@@ -76,6 +76,7 @@ public:
     NMetrics::TAverageValue<TResourceRawValues, 20> AveragedResourceTotalValues;
     double NodeTotalUsage = 0;
     NMetrics::TFastRiseAverageValue<double, 20> AveragedNodeTotalUsage;
+    NMetrics::TAverageValue<double, 20> AveragedNodeTotalCpuUsage;
     TResourceRawValues ResourceMaximumValues;
     TInstant StartTime;
     TNodeLocation Location;
@@ -90,6 +91,7 @@ public:
     NKikimrHive::TNodeStatistics Statistics;
     bool DeletionScheduled = false;
     TString Name;
+    ui64 DrainSeqNo = 0;
 
     TNodeInfo(TNodeId nodeId, THive& hive);
     TNodeInfo(const TNodeInfo&) = delete;
@@ -158,7 +160,7 @@ public:
     bool IsAllowedToRunTablet(TTabletDebugState* debugState = nullptr) const;
     bool IsAllowedToRunTablet(const TTabletInfo& tablet, TTabletDebugState* debugState = nullptr) const;
     bool IsAbleToRunTablet(const TTabletInfo& tablet, TTabletDebugState* debugState = nullptr) const;
-    i32 GetPriorityForTablet(const TTabletInfo& tablet) const;
+    i32 GetPriorityForTablet(const TTabletInfo& tablet, TDataCenterPriority& dcPriority) const;
     ui64 GetMaxTabletsScheduled() const;
     ui64 GetMaxCountForTabletType(TTabletTypes::EType tabletType) const;
 
@@ -231,7 +233,7 @@ public:
         }
     }
 
-    bool CanBeDeleted() const;
+    bool CanBeDeleted(TInstant now) const;
     void RegisterInDomains();
     void DeregisterInDomains();
     void Ping();
@@ -270,7 +272,7 @@ public:
 
     void UpdateResourceTotalUsage(const NKikimrHive::TEvTabletMetrics& metrics);
     void ActualizeNodeStatistics(TInstant now);
-    ui64 GetRestartsPerPeriod(TInstant barrier) const;
+    ui64 GetRestartsPerPeriod(TInstant barrier = {}) const;
 
     TDataCenterId GetDataCenter() const {
         return Location.GetDataCenterId();

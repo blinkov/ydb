@@ -11,9 +11,9 @@
 #include <ydb/core/tx/datashard/range_ops.h>
 
 #include <ydb/library/yql/dq/actors/compute/dq_compute_actor.h>
-#include <ydb/library/yql/minikql/mkql_function_registry.h>
-#include <ydb/library/yql/minikql/mkql_string_util.h>
-#include <ydb/library/yql/minikql/mkql_node_cast.h>
+#include <yql/essentials/minikql/mkql_function_registry.h>
+#include <yql/essentials/minikql/mkql_string_util.h>
+#include <yql/essentials/minikql/mkql_node_cast.h>
 
 #include <ydb/library/actors/core/log.h>
 
@@ -506,7 +506,7 @@ TEngineBay::TEngineBay(TDataShard* self, TTransactionContext& txc, const TActorC
 
     auto tabletId = self->TabletID();
     auto txId = stepTxId.TxId;
-    const TActorSystem* actorSystem = ctx.ExecutorThread.ActorSystem;
+    const TActorSystem* actorSystem = ctx.ActorSystem();
     EngineSettings->LogErrorWriter = [actorSystem, tabletId, txId](const TString& message) {
         LOG_ERROR_S(*actorSystem, NKikimrServices::MINIKQL_ENGINE,
             "Shard %" << tabletId << ", txid %" <<txId << ", engine error: " << message);

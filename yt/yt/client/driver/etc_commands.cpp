@@ -96,6 +96,9 @@ void TGetSupportedFeaturesCommand::DoExecute(ICommandContextPtr context)
     for (auto staticFeature : StaticFeatures) {
         features->AddChild(TString(staticFeature.first), BuildYsonNodeFluently().Value(staticFeature.second));
     }
+    features->AddChild(
+        "require_password_in_authentication_commands",
+        BuildYsonNodeFluently().Value(context->GetConfig()->RequirePasswordInAuthenticationCommands));
     context->ProduceOutputValue(BuildYsonStringFluently()
         .BeginMap()
             .Item("features").Value(features)
@@ -109,7 +112,7 @@ void TCheckPermissionCommand::Register(TRegistrar registrar)
     registrar.Parameter("user", &TThis::User);
     registrar.Parameter("permission", &TThis::Permission);
     registrar.Parameter("path", &TThis::Path);
-    registrar.ParameterWithUniversalAccessor<std::optional<std::vector<TString>>>(
+    registrar.ParameterWithUniversalAccessor<std::optional<std::vector<std::string>>>(
         "columns",
         [] (TThis* command) -> auto& {
             return command->Options.Columns;
@@ -405,8 +408,9 @@ void TExecuteBatchCommand::DoExecute(ICommandContextPtr context)
 
 void TDiscoverProxiesCommand::Register(TRegistrar registrar)
 {
-    registrar.Parameter("type", &TThis::Type)
-        .Default(EProxyType::Rpc);
+    registrar.Parameter("kind", &TThis::Kind)
+        .Alias("type")
+        .Default(EProxyKind::Rpc);
     registrar.Parameter("role", &TThis::Role)
         .Default(DefaultRpcProxyRole);
     registrar.Parameter("address_type", &TThis::AddressType)
@@ -420,11 +424,11 @@ void TDiscoverProxiesCommand::Register(TRegistrar registrar)
 void TDiscoverProxiesCommand::DoExecute(ICommandContextPtr context)
 {
     TProxyDiscoveryRequest request{
-        .Type = Type,
+        .Kind = Kind,
         .Role = Role,
         .AddressType = AddressType,
         .NetworkName = NetworkName,
-        .IgnoreBalancers = IgnoreBalancers
+        .IgnoreBalancers = IgnoreBalancers,
     };
 
     const auto& proxyDiscoveryCache = context->GetDriver()->GetProxyDiscoveryCache();

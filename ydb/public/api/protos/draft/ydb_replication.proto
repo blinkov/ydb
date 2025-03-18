@@ -36,11 +36,20 @@ message ConnectionParams {
 
     string endpoint = 1;
     string database = 2;
+    bool enable_ssl = 5;
+    string connection_string = 6;
 
     oneof credentials {
         StaticCredentials static_credentials = 3;
         OAuth oauth = 4;
     }
+}
+
+message ConsistencyLevelRow {
+}
+
+message ConsistencyLevelGlobal {
+    google.protobuf.Duration commit_interval = 1;
 }
 
 message DescribeReplicationResult {
@@ -70,7 +79,12 @@ message DescribeReplicationResult {
 
     // Description of scheme object.
     Ydb.Scheme.Entry self = 1;
+
     ConnectionParams connection_params = 2;
+    oneof consistency_level {
+        ConsistencyLevelRow row_consistency = 7;
+        ConsistencyLevelGlobal global_consistency = 8;
+    }
     repeated Item items = 3;
     oneof state {
         RunningState running = 4;

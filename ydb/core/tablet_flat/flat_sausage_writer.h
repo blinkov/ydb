@@ -35,7 +35,9 @@ namespace NPageCollection {
                 Buffer.append(chunk.data(), chunk.size());
                 offset += piece;
 
-                if (Buffer.size() >= MaxBlobSize) Flush();
+                if (Buffer.size() >= MaxBlobSize) {
+                    Flush();
+                }
             }
 
             return Record.Push(type, body);
@@ -59,13 +61,13 @@ namespace NPageCollection {
             return meta;
         }
 
-        TVector<TGlob> Grab() noexcept
+        TVector<TGlob> Grab()
         {
             return std::exchange(Blobs, TVector<TGlob>());
         }
 
     private:
-        void Flush() noexcept
+        void Flush()
         {
             if (Buffer) {
                 auto glob = CookieAllocator.Do(Channel, Buffer.size());
@@ -77,7 +79,7 @@ namespace NPageCollection {
             }
         }
 
-        TString TakeBuffer() noexcept
+        TString TakeBuffer()
         {
             TString data;
 

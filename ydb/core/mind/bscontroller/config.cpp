@@ -93,7 +93,8 @@ namespace NKikimr::NBsController {
                 const ui32 nodeId = fullPDiskId.NodeId;
                 const ui32 pdiskId = fullPDiskId.PDiskId;
 
-                NKikimrBlobStorage::TNodeWardenServiceSet &service = *Services[nodeId].MutableServiceSet();
+                auto& query = Services[nodeId];
+                NKikimrBlobStorage::TNodeWardenServiceSet &service = *query.MutableServiceSet();
                 NKikimrBlobStorage::TNodeWardenServiceSet::TPDisk *pdisk = service.AddPDisks();
                 pdisk->SetNodeID(nodeId);
                 pdisk->SetPDiskID(pdiskId);
@@ -117,6 +118,20 @@ namespace NKikimr::NBsController {
                     case NBsController::TPDiskMood::EValue::Restarting:
                         pdisk->SetEntityStatus(NKikimrBlobStorage::RESTART);
                         break;
+                    case NBsController::TPDiskMood::EValue::ReadOnly:
+                        pdisk->SetReadOnly(true);
+                        break;
+                    case NBsController::TPDiskMood::EValue::Stop:
+                        pdisk->SetStop(true);
+                        break;
+                }
+
+                if (auto& shred = Self->ShredState; shred.ShouldShred(fullPDiskId, pdiskInfo)) {
+                    const auto& generation = shred.GetCurrentGeneration();
+                    Y_ABORT_UNLESS(generation);
+                    auto *m = query.MutableShredRequest();
+                    m->SetShredGeneration(*generation);
+                    m->AddPDiskIds(fullPDiskId.PDiskId);
                 }
 
                 return pdisk;
@@ -330,7 +345,27 @@ namespace NKikimr::NBsController {
 
             // check that group modification would not degrade failure model
             if (!suppressFailModelChecking) {
+                THashSet<TGroupId> groupsToCheck;
+                for (auto&& [base, overlay] : state.VSlots.Diff()) {
+                    if (base && base->second->Group) {
+                        if (!overlay->second || !overlay->second->Group) {
+                            // Disk moved or became inactive
+                            groupsToCheck.emplace(base->second->GroupId);
+                        } else {
+                            const NKikimrBlobStorage::EVDiskStatus prevStatus = base->second->GetStatus();
+                            const NKikimrBlobStorage::EVDiskStatus curStatus = overlay->second->GetStatus();
+
+                            if (prevStatus != NKikimrBlobStorage::EVDiskStatus::ERROR && curStatus == NKikimrBlobStorage::EVDiskStatus::ERROR) {
+                                // VDisk's status has changed to ERROR
+                                groupsToCheck.emplace(overlay->second->GroupId);
+                            }
+                        }
+                    }
+                }
                 for (TGroupId groupId : state.GroupFailureModelChanged) {
+                    if (!groupsToCheck.contains(groupId)) {
+                        continue;
+                    }
                     if (const TGroupInfo *group = state.Groups.Find(groupId); group && group->VDisksInGroup) {
                         // process only groups with changed content; create topology for group
                         auto& topology = *group->Topology;
@@ -479,6 +514,7 @@ namespace NKikimr::NBsController {
             CommitStoragePoolStatUpdates(state);
             CommitSysViewUpdates(state);
             CommitVirtualGroupUpdates(state);
+            CommitShredUpdates(state);
 
             // add updated and remove deleted vslots from VSlotReadyTimestampQ
             const TMonotonic now = TActivationContext::Monotonic();
@@ -486,9 +522,9 @@ namespace NKikimr::NBsController {
                 if (!overlay->second || !overlay->second->Group) { // deleted one
                     (overlay->second ? overlay->second : base->second)->DropFromVSlotReadyTimestampQ();
                     NotReadyVSlotIds.erase(overlay->first);
-                } else if (overlay->second->Status != NKikimrBlobStorage::EVDiskStatus::READY) {
+                } else if (overlay->second->GetStatus() != NKikimrBlobStorage::EVDiskStatus::READY) {
                     overlay->second->DropFromVSlotReadyTimestampQ();
-                } else if (!base || base->second->Status != NKikimrBlobStorage::EVDiskStatus::READY) {
+                } else if (!base || base->second->GetStatus() != NKikimrBlobStorage::EVDiskStatus::READY) {
                     overlay->second->PutInVSlotReadyTimestampQ(now);
                 } else {
                     Y_DEBUG_ABORT_UNLESS(overlay->second->IsReady || overlay->second->IsInVSlotReadyTimestampQ());
@@ -967,6 +1003,7 @@ namespace NKikimr::NBsController {
             pb->MutablePDiskMetrics()->ClearPDiskId();
             pb->SetExpectedSerial(pdisk.ExpectedSerial);
             pb->SetLastSeenSerial(pdisk.LastSeenSerial);
+            pb->SetReadOnly(pdisk.Mood == TPDiskMood::ReadOnly);
         }
 
         void TBlobStorageController::Serialize(NKikimrBlobStorage::TVSlotId *pb, TVSlotId id) {
@@ -998,7 +1035,7 @@ namespace NKikimr::NBsController {
             pb->SetAllocatedSize(vslot.Metrics.GetAllocatedSize());
             pb->MutableVDiskMetrics()->CopyFrom(vslot.Metrics);
             pb->MutableVDiskMetrics()->ClearVDiskId();
-            pb->SetStatus(NKikimrBlobStorage::EVDiskStatus_Name(vslot.Status));
+            pb->SetStatus(NKikimrBlobStorage::EVDiskStatus_Name(vslot.GetStatus()));
             for (const TVSlotId& vslotId : vslot.Donors) {
                 auto *item = pb->AddDonors();
                 Serialize(item->MutableVSlotId(), vslotId);
@@ -1166,6 +1203,11 @@ namespace NKikimr::NBsController {
             settings->AddAllowMultipleRealmsOccupation(AllowMultipleRealmsOccupation);
             settings->AddUseSelfHealLocalPolicy(UseSelfHealLocalPolicy);
             settings->AddTryToRelocateBrokenDisksLocallyFirst(TryToRelocateBrokenDisksLocallyFirst);
+        }
+
+        void TBlobStorageController::TConfigState::ExecuteStep(const NKikimrBlobStorage::TGetInterfaceVersion& /*cmd*/,
+                TStatus& status) {
+            status.SetInterfaceVersion(BSC_INTERFACE_VERSION);
         }
 
 } // NKikimr::NBsController

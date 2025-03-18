@@ -26,7 +26,7 @@ NKikimrSubDomains::TSubDomainSettings GetSubDomainDefaultSettings(const TString 
     return subdomain;
 }
 
-TTestEnv::TTestEnv(ui32 staticNodes, ui32 dynamicNodes, ui32 storagePools, ui32 pqTabletsN, bool enableSVP) {
+TTestEnv::TTestEnv(ui32 staticNodes, ui32 dynamicNodes, const TTestEnvSettings& settings) {
     auto mbusPort = PortManager.GetPort();
     auto grpcPort = PortManager.GetPort();
 
@@ -43,12 +43,22 @@ TTestEnv::TTestEnv(ui32 staticNodes, ui32 dynamicNodes, ui32 storagePools, ui32 
     // in some tests we check data size, which depends on compaction,
     NKikimrConfig::TFeatureFlags featureFlags;
     featureFlags.SetEnableBackgroundCompaction(false);
+    featureFlags.SetEnableResourcePools(true);
+    featureFlags.SetEnableFollowerStats(true);
+    featureFlags.SetEnableVectorIndex(true);
     Settings->SetFeatureFlags(featureFlags);
 
-    Settings->SetEnablePersistentQueryStats(enableSVP);
-    Settings->SetEnableDbCounters(enableSVP);
+    Settings->SetEnablePersistentQueryStats(settings.EnableSVP);
+    Settings->SetEnableDbCounters(settings.EnableSVP);
+    Settings->SetEnableForceFollowers(settings.EnableForceFollowers);
+    Settings->SetEnableTablePgTypes(true);
+    Settings->SetEnableShowCreate(true);
 
-    for (ui32 i : xrange(storagePools)) {
+    NKikimrConfig::TAppConfig appConfig;
+    *appConfig.MutableFeatureFlags() = Settings->FeatureFlags;
+    Settings->SetAppConfig(appConfig);
+
+    for (ui32 i : xrange(settings.StoragePools)) {
         TString poolName = Sprintf("test%d", i);
         Settings->AddStoragePool(poolName, TString("/Root:") + poolName, 2);
     }
@@ -57,6 +67,10 @@ TTestEnv::TTestEnv(ui32 staticNodes, ui32 dynamicNodes, ui32 storagePools, ui32 
 
     Server = new Tests::TServer(*Settings);
     Server->EnableGRpc(grpcPort);
+
+    if (settings.ShowCreateTable) {
+        this->Server->SetupDefaultProfiles();
+    }
 
     auto* runtime = Server->GetRuntime();
     for (ui32 i = 0; i < runtime->GetNodeCount(); ++i) {
@@ -69,13 +83,17 @@ TTestEnv::TTestEnv(ui32 staticNodes, ui32 dynamicNodes, ui32 storagePools, ui32 
 
     Client->InitRootScheme("Root");
 
-    if (pqTabletsN) {
+    if (settings.PqTabletsN) {
         NKikimr::NPQ::FillPQConfig(Settings->PQConfig, "/Root/PQ", true);
-        PqTabletIds = Server->StartPQTablets(pqTabletsN);
+        PqTabletIds = Server->StartPQTablets(settings.PqTabletsN);
     }
 
     Endpoint = "localhost:" + ToString(grpcPort);
-    DriverConfig = NYdb::TDriverConfig().SetEndpoint(Endpoint);
+    if (settings.ShowCreateTable) {
+        DriverConfig = NYdb::TDriverConfig().SetEndpoint(Endpoint).SetDatabase("/Root");
+    } else {
+        DriverConfig = NYdb::TDriverConfig().SetEndpoint(Endpoint);
+    }
     Driver = MakeHolder<NYdb::TDriver>(DriverConfig);
 
     Server->GetRuntime()->SetLogPriority(NKikimrServices::SYSTEM_VIEWS, NActors::NLog::PRI_DEBUG);

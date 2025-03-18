@@ -3,6 +3,16 @@
 #include <library/cpp/testing/unittest/registar.h>
 
 namespace NKikimr::NKqp::NFederatedQueryTest {
+    TString GetSymbolsString(char start, char end, const TString& skip) {
+        TStringBuilder result;
+        for (char symbol = start; symbol <= end; ++symbol) {
+            if (skip.Contains(symbol)) {
+                continue;
+            }
+            result << symbol;
+        }
+        return result;
+    }
 
     NYdb::NQuery::TScriptExecutionOperation WaitScriptExecutionOperation(const NYdb::TOperation::TOperationId& operationId, const NYdb::TDriver& ydbDriver) {
         NYdb::NOperation::TOperationClient client(ydbDriver);
@@ -27,10 +37,15 @@ namespace NKikimr::NKqp::NFederatedQueryTest {
         NKikimrConfig::TFeatureFlags featureFlags;
         featureFlags.SetEnableExternalDataSources(true);
         featureFlags.SetEnableScriptExecutionOperations(true);
+        featureFlags.SetEnableExternalSourceSchemaInference(true);
         if (!appConfig) {
             appConfig.emplace();
         }
-        appConfig->MutableTableServiceConfig()->SetEnablePreparedDdl(true);
+        appConfig->MutableQueryServiceConfig()->AddAvailableExternalDataSources("ObjectStorage");
+        appConfig->MutableQueryServiceConfig()->AddAvailableExternalDataSources("ClickHouse");
+        appConfig->MutableQueryServiceConfig()->AddAvailableExternalDataSources("PostgreSQL");
+        appConfig->MutableQueryServiceConfig()->AddAvailableExternalDataSources("MySQL");
+        appConfig->MutableQueryServiceConfig()->AddAvailableExternalDataSources("Ydb");
 
         auto settings = TKikimrSettings();
 
@@ -48,6 +63,10 @@ namespace NKikimr::NKqp::NFederatedQueryTest {
             appConfig->GetQueryServiceConfig().GetGeneric(),
             appConfig->GetQueryServiceConfig().GetYt(),
             nullptr,
+            appConfig->GetQueryServiceConfig().GetSolomon(),
+            nullptr,
+            nullptr,
+            NYql::NDq::CreateReadActorFactoryConfig(appConfig->GetQueryServiceConfig().GetS3()),
             nullptr);
 
         settings
@@ -63,4 +82,4 @@ namespace NKikimr::NKqp::NFederatedQueryTest {
         return std::make_shared<TKikimrRunner>(settings);
     }
 
-}
+} // namespace NKikimr::NKqp::NFederatedQueryTest

@@ -13,14 +13,14 @@
 #include <ydb/library/actors/core/actorsystem.h>
 #include <ydb/library/actors/core/event_local.h>
 #include <ydb/library/actors/core/events.h>
-#include <ydb/library/yql/public/issue/yql_issue.h>
+#include <yql/essentials/public/issue/yql_issue.h>
 
 #include <ydb/public/api/protos/ydb_status_codes.pb.h>
 #include <ydb/public/api/protos/ydb_table.pb.h>
-#include <ydb/public/sdk/cpp/client/ydb_params/params.h>
-#include <ydb/public/sdk/cpp/client/ydb_proto/accessor.h>
-#include <ydb/public/sdk/cpp/client/ydb_result/result.h>
-#include <ydb/public/sdk/cpp/client/ydb_types/fluent_settings_helpers.h>
+#include <ydb/public/sdk/cpp/include/ydb-cpp-sdk/client/params/params.h>
+#include <ydb/public/sdk/cpp/include/ydb-cpp-sdk/client/proto/accessor.h>
+#include <ydb/public/sdk/cpp/include/ydb-cpp-sdk/client/result/result.h>
+#include <ydb/public/sdk/cpp/include/ydb-cpp-sdk/client/types/fluent_settings_helpers.h>
 
 
 namespace NKikimr {
@@ -115,7 +115,7 @@ private:
 public:
     static constexpr char ActorName[] = "SQL_QUERY";
 
-    explicit TQueryBase(ui64 logComponent, TString sessionId = {}, TString database = {});
+    explicit TQueryBase(ui64 logComponent, TString sessionId = {}, TString database = {}, bool isSystemUser = false);
 
     void Bootstrap();
 
@@ -199,6 +199,7 @@ protected:
     const ui64 LogComponent;
     TString Database;
     TString SessionId;
+    bool IsSystemUser = false;
     TString TxId;
     bool DeleteSession = false;
     bool RunningQuery = false;

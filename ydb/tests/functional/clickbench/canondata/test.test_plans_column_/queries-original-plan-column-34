@@ -35,17 +35,26 @@
                                         "PlanNodeType": "Connection",
                                         "Plans": [
                                             {
-                                                "Node Type": "TopSort",
+                                                "Node Type": "TopSort-Aggregate",
                                                 "Operators": [
+                                                    {
+                                                        "Inputs": [
+                                                            {
+                                                                "InternalOperatorId": 1
+                                                            }
+                                                        ],
+                                                        "Limit": "10",
+                                                        "Name": "TopSort",
+                                                        "TopSortBy": "argument.Count0"
+                                                    },
                                                     {
                                                         "Inputs": [
                                                             {
                                                                 "ExternalPlanNodeId": 2
                                                             }
                                                         ],
-                                                        "Limit": "10",
-                                                        "Name": "TopSort",
-                                                        "TopSortBy": "argument.Count0"
+                                                        "Name": "Aggregate",
+                                                        "Phase": "Final"
                                                     }
                                                 ],
                                                 "PlanNodeId": 3,
@@ -60,21 +69,12 @@
                                                         "PlanNodeType": "Connection",
                                                         "Plans": [
                                                             {
-                                                                "Node Type": "Aggregate-TableFullScan",
+                                                                "Node Type": "TableFullScan",
                                                                 "Operators": [
-                                                                    {
-                                                                        "Aggregation": "{_yql_agg_0: SUM(state._yql_agg_0,1)}",
-                                                                        "GroupBy": "",
-                                                                        "Inputs": [
-                                                                            {
-                                                                                "InternalOperatorId": 1
-                                                                            }
-                                                                        ],
-                                                                        "Name": "Aggregate"
-                                                                    },
                                                                     {
                                                                         "Inputs": [],
                                                                         "Name": "TableFullScan",
+                                                                        "Path": "/local/clickbench/plans/column/hits",
                                                                         "ReadColumns": [
                                                                             "URL",
                                                                             "UserID"
@@ -90,6 +90,28 @@
                                                                         "SsaProgram": {
                                                                             "Command": [
                                                                                 {
+                                                                                    "GroupBy": {
+                                                                                        "Aggregates": [
+                                                                                            {
+                                                                                                "Column": {
+                                                                                                    "Id": 106
+                                                                                                },
+                                                                                                "Function": {
+                                                                                                    "Id": 2
+                                                                                                }
+                                                                                            }
+                                                                                        ],
+                                                                                        "KeyColumns": [
+                                                                                            {
+                                                                                                "Id": 14
+                                                                                            },
+                                                                                            {
+                                                                                                "Id": 10
+                                                                                            }
+                                                                                        ]
+                                                                                    }
+                                                                                },
+                                                                                {
                                                                                     "Projection": {
                                                                                         "Columns": [
                                                                                             {
@@ -97,6 +119,9 @@
                                                                                             },
                                                                                             {
                                                                                                 "Id": 10
+                                                                                            },
+                                                                                            {
+                                                                                                "Id": 106
                                                                                             }
                                                                                         ]
                                                                                     }
@@ -125,7 +150,10 @@
                             }
                         ]
                     }
-                ]
+                ],
+                "Stats": {
+                    "ResourcePoolId": "default"
+                }
             },
             "tables": [
                 {

@@ -7,6 +7,8 @@
 #include <util/generic/hash_set.h>
 
 #include <ydb/core/scheme/scheme_tablecell.h>
+#include <ydb/library/services/services.pb.h>
+#include <ydb/library/actors/core/log.h>
 
 namespace NKikimr {
 namespace NTable {
@@ -74,7 +76,7 @@ public:
     }
 
 private:
-    int CompareKeys(const TDbTupleRef& a, const TDbTupleRef& b) const noexcept {
+    int CompareKeys(const TDbTupleRef& a, const TDbTupleRef& b) const {
         return ComparePartKeys(a.Cells(), b.Cells(), *KeyDefaults);
     }
 
@@ -102,6 +104,7 @@ struct TStats {
     ui64 RowCount = 0;
     TChanneledDataSize DataSize = { };
     TChanneledDataSize IndexSize = { };
+    ui64 ByKeyFilterSize = 0;
     THistogram RowCountHistogram;
     THistogram DataSizeHistogram;
 
@@ -109,6 +112,7 @@ struct TStats {
         RowCount = 0;
         DataSize = { };
         IndexSize = { };
+        ByKeyFilterSize = 0;
         RowCountHistogram.clear();
         DataSizeHistogram.clear();
     }
@@ -117,8 +121,19 @@ struct TStats {
         std::swap(RowCount, other.RowCount);
         std::swap(DataSize, other.DataSize);
         std::swap(IndexSize, other.IndexSize);
+        std::swap(ByKeyFilterSize, other.ByKeyFilterSize);
         RowCountHistogram.swap(other.RowCountHistogram);
         DataSizeHistogram.swap(other.DataSizeHistogram);
+    }
+
+    TString ToString() const {
+        return TStringBuilder() 
+            << "RowCount: " << RowCount
+            << " DataSize: " << DataSize.Size
+            << " IndexSize: " << IndexSize.Size
+            << " ByKeyFilterSize: " << ByKeyFilterSize
+            << " RowCountHistogram: " << RowCountHistogram.size()
+            << " DataSizeHistogram: " << DataSizeHistogram.size();
     }
 };
 
@@ -190,7 +205,27 @@ private:
 
 using TBuildStatsYieldHandler = std::function<void()>;
 
-bool BuildStats(const TSubset& subset, TStats& stats, ui64 rowCountResolution, ui64 dataSizeResolution, ui32 histogramBucketsCount, IPages* env, TBuildStatsYieldHandler yieldHandler);
+#ifndef NDEBUG
+#define LOG_BUILD_STATS(stream) \
+    do { \
+        if (auto actorContext = NActors::TlsActivationContext; actorContext) { \
+            LOG_TRACE_S(*actorContext, NKikimrServices::TABLET_STATS_BUILDER, logPrefix << stream); \
+        } else { \
+            Cerr << logPrefix << stream << Endl; \
+        } \
+    } while (0)
+#else
+#define LOG_BUILD_STATS(stream) \
+    do { \
+        if (auto actorContext = NActors::TlsActivationContext; actorContext) { \
+            LOG_TRACE_S(*actorContext, NKikimrServices::TABLET_STATS_BUILDER, logPrefix << stream); \
+        } \
+    } while (0)
+#endif
+
+bool BuildStats(const TSubset& subset, TStats& stats, ui64 rowCountResolution, ui64 dataSizeResolution, ui32 histogramBucketsCount, IPages* env, 
+    TBuildStatsYieldHandler yieldHandler, const TString& logPrefix = {});
+
 void GetPartOwners(const TSubset& subset, THashSet<ui64>& partOwners);
 
 }}

@@ -12,6 +12,7 @@
 #include <ydb/core/cms/console/immediate_controls_configurator.h>
 #include <ydb/core/control/immediate_control_board_actor.h>
 #include <ydb/core/node_whiteboard/node_whiteboard.h>
+#include <ydb/core/blobstorage/dsproxy/mock/dsproxy_mock.h>
 #include <ydb/core/blobstorage/pdisk/blobstorage_pdisk_tools.h>
 #include <ydb/core/quoter/quoter_service.h>
 #include <ydb/core/tablet/tablet_monitoring_proxy.h>
@@ -30,7 +31,7 @@
 #include <ydb/core/tx/scheme_board/cache.h>
 #include <ydb/core/tx/columnshard/blob_cache.h>
 #include <ydb/core/sys_view/service/sysview_service.h>
-#include <ydb/core/statistics/stat_service.h>
+#include <ydb/core/statistics/service/service.h>
 
 #include <util/system/env.h>
 
@@ -155,17 +156,11 @@ namespace NPDisk {
             TActorSetupCmd(CreateGRpcProxyStatus(), TMailboxType::Revolving, 0), nodeIndex);
     }
 
-    void SetupSharedPageCache(TTestActorRuntime& runtime, ui32 nodeIndex, NFake::TCaches caches)
+    void SetupSharedPageCache(TTestActorRuntime& runtime, ui32 nodeIndex, const NSharedCache::TSharedCacheConfig& config)
     {
-        auto pageCollectionCacheConfig = MakeHolder<TSharedPageCacheConfig>();
-        pageCollectionCacheConfig->CacheConfig = new TCacheCacheConfig(caches.Shared, nullptr, nullptr, nullptr);
-        pageCollectionCacheConfig->TotalAsyncQueueInFlyLimit = caches.AsyncQueue;
-        pageCollectionCacheConfig->TotalScanQueueInFlyLimit = caches.ScanQueue;
-        pageCollectionCacheConfig->Counters = MakeIntrusive<TSharedPageCacheCounters>(runtime.GetDynamicCounters(nodeIndex));
-
-        runtime.AddLocalService(MakeSharedPageCacheId(0),
+        runtime.AddLocalService(NSharedCache::MakeSharedPageCacheId(0),
             TActorSetupCmd(
-                CreateSharedPageCache(std::move(pageCollectionCacheConfig), runtime.GetMemObserver(nodeIndex)),
+                NSharedCache::CreateSharedPageCache(config, runtime.GetDynamicCounters(nodeIndex)),
                 TMailboxType::ReadAsFilled,
                 0),
             nodeIndex);
@@ -335,11 +330,13 @@ namespace NPDisk {
     }
 
     void SetupBasicServices(TTestActorRuntime& runtime, TAppPrepare& app, bool mock,
-                            NFake::INode* factory, NFake::TStorage storage, NFake::TCaches caches, bool forceFollowers)
+                            NFake::INode* factory, NFake::TStorage storage, const NSharedCache::TSharedCacheConfig* sharedCacheConfig, bool forceFollowers,
+                            TVector<TIntrusivePtr<NFake::TProxyDS>> dsProxies)
     {
         runtime.SetDispatchTimeout(storage.UseDisk ? DISK_DISPATCH_TIMEOUT : DEFAULT_DISPATCH_TIMEOUT);
 
-        TTestStorageFactory disk(runtime, storage, mock);
+        bool addGroups = dsProxies.empty();
+        TTestStorageFactory disk(runtime, storage, mock, addGroups);
 
         {
             NKikimrBlobStorage::TNodeWardenServiceSet bsConfig;
@@ -356,6 +353,9 @@ namespace NPDisk {
             app.Icb.emplace_back(new TControlBoard);
         }
 
+        NSharedCache::TSharedCacheConfig defaultSharedCacheConfig;
+        defaultSharedCacheConfig.SetMemoryLimit(32_MB);
+
         for (ui32 nodeIndex = 0; nodeIndex < runtime.GetNodeCount(); ++nodeIndex) {
             SetupStateStorageGroups(runtime, nodeIndex);
             NKikimrProto::TKeyConfig keyConfig;
@@ -363,12 +363,18 @@ namespace NPDisk {
                 keyConfig = it->second;
             }
             SetupIcb(runtime, nodeIndex, app.ImmediateControlsConfig, app.Icb[nodeIndex]);
+            for (const auto& dsProxy : dsProxies) {
+                runtime.AddLocalService(
+                    MakeBlobStorageProxyID(dsProxy->GetGroupId()),
+                    TActorSetupCmd(CreateBlobStorageGroupProxyMockActor(dsProxy), TMailboxType::ReadAsFilled, 0),
+                    nodeIndex);
+            }
             SetupBSNodeWarden(runtime, nodeIndex, disk.MakeWardenConf(*app.Domains, keyConfig));
 
             SetupTabletResolver(runtime, nodeIndex);
             SetupTabletPipePerNodeCaches(runtime, nodeIndex, forceFollowers);
             SetupResourceBroker(runtime, nodeIndex, app.ResourceBrokerConfig);
-            SetupSharedPageCache(runtime, nodeIndex, caches);
+            SetupSharedPageCache(runtime, nodeIndex, sharedCacheConfig ? *sharedCacheConfig : defaultSharedCacheConfig);
             SetupBlobCache(runtime, nodeIndex);
             SetupSysViewService(runtime, nodeIndex);
             SetupQuoterService(runtime, nodeIndex);

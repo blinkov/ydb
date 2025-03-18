@@ -22,6 +22,7 @@
 #include <ydb/library/services/services.pb.h>
 
 #include <ydb/library/actors/core/actor_bootstrapped.h>
+#include <ydb/library/actors/core/callstack.h>
 #include <ydb/library/actors/core/event_local.h>
 #include <ydb/library/actors/core/events.h>
 #include <ydb/library/actors/core/executor_pool_basic.h>
@@ -35,6 +36,7 @@
 #include <ydb/library/actors/interconnect/mock/ic_mock.h>
 #include <ydb/library/actors/protos/services_common.pb.h>
 #include <ydb/library/actors/util/affinity.h>
+#include <ydb/library/pdisk_io/aio.h>
 #include <library/cpp/svnversion/svnversion.h>
 #include <library/cpp/testing/unittest/registar.h>
 #include <library/cpp/testing/unittest/tests_data.h>
@@ -216,11 +218,13 @@ protected:
             , MessageVGetResult
             , MessageVPutResult
             , MessageVBlockResult
+            , MessageVGetBlockResult
             , MessageRangeResult
             , MessageDiscoverResult
             , MessageCollectGarbageResult
             , MessageStatusResult
             , MessageBlockResult
+            , MessageGetBlockResult
             , MessageStartProfilerResult
             , MessageStopProfilerResult
             , MessageVStatusResult
@@ -420,6 +424,14 @@ protected:
         ActTestFSM(ctx);
     }
 
+    void HandleGetBlockResult(TEvBlobStorage::TEvGetBlockResult::TPtr &ev, const TActorContext &ctx) {
+        LastResponse.Message = TResponseData::MessageGetBlockResult;
+        TEvBlobStorage::TEvGetBlockResult *msg = ev->Get();
+        VERBOSE_COUT("HandleGetBlockResult: " << StatusToString(msg->Status));
+        LastResponse.Status = msg->Status;
+        ActTestFSM(ctx);
+    }
+
     void HandlePutResult(TEvBlobStorage::TEvPutResult::TPtr &ev, const TActorContext &ctx) {
         LastResponse.Message = TResponseData::MessagePutResult;
         TEvBlobStorage::TEvPutResult *msg = ev->Get();
@@ -561,6 +573,16 @@ protected:
         ActTestFSM(ctx);
     }
 
+    void HandleVGetBlockResult(TEvBlobStorage::TEvVGetBlockResult::TPtr &ev, const TActorContext &ctx) {
+        LastResponse.Message = TResponseData::MessageVGetBlockResult;
+        const NKikimrBlobStorage::TEvVGetBlockResult &record = ev->Get()->Record;
+
+        VERBOSE_COUT("HandleVGetBlockResult: " << StatusToString(record.GetStatus()));
+
+        LastResponse.Status = record.GetStatus();
+        ActTestFSM(ctx);
+    }
+
     void HandleVStatusResult(TEvBlobStorage::TEvVStatusResult::TPtr &ev, const TActorContext &ctx) {
         LastResponse.Message = TResponseData::MessageVStatusResult;
         const NKikimrBlobStorage::TEvVStatusResult &record = ev->Get()->Record;
@@ -638,12 +660,14 @@ public:
             HFunc(TEvBlobStorage::TEvVGetResult, HandleVGetResult);
             HFunc(TEvBlobStorage::TEvVPutResult, HandleVPutResult);
             HFunc(TEvBlobStorage::TEvVBlockResult, HandleVBlockResult);
+            HFunc(TEvBlobStorage::TEvVGetBlockResult, HandleVGetBlockResult);
             HFunc(TEvBlobStorage::TEvVStatusResult, HandleVStatusResult);
             HFunc(TEvBlobStorage::TEvStatusResult, HandleStatusResult);
             HFunc(TEvBlobStorage::TEvVCompactResult, HandleVCompactResult);
             HFunc(TEvBlobStorage::TEvDiscoverResult, HandleDiscoverResult);
             HFunc(TEvBlobStorage::TEvCollectGarbageResult, HandleCollectGarbageResult);
             HFunc(TEvBlobStorage::TEvBlockResult, HandleBlockResult);
+            HFunc(TEvBlobStorage::TEvGetBlockResult, HandleGetBlockResult);
             HFunc(TEvProfiler::TEvStartResult, HandleStartProfilerResult);
             HFunc(TEvProfiler::TEvStopResult, HandleStopProfilerResult);
             HFunc(TEvProxyQueueState, HandleProxyQueueState);
@@ -3070,7 +3094,7 @@ class TTestBlobStorageProxyBasic1 : public TTestBlobStorageProxy {
                 break;
             case 230:
                 if (Env->ShouldBeUndiscoverable) {
-                    TEST_RESPONSE(MessageDiscoverResult, ERROR, 0, nullptr);
+                    TEST_RESPONSE(MessageDiscoverResult, ERROR, 0, "");
                 } else {
                     TEST_RESPONSE(MessageDiscoverResult, OK, 1, testData2);
                 }
@@ -3079,7 +3103,7 @@ class TTestBlobStorageProxyBasic1 : public TTestBlobStorageProxy {
                 break;
             case 240:
                 if (Env->ShouldBeUndiscoverable) {
-                    TEST_RESPONSE(MessageDiscoverResult, ERROR, 0, 0);
+                    TEST_RESPONSE(MessageDiscoverResult, ERROR, 0, "");
                 } else {
                     TEST_RESPONSE(MessageDiscoverResult, OK, 1, "");
                 }
@@ -3088,7 +3112,7 @@ class TTestBlobStorageProxyBasic1 : public TTestBlobStorageProxy {
                 break;
             case 250:
                 if (Env->ShouldBeUndiscoverable) {
-                    TEST_RESPONSE(MessageDiscoverResult, ERROR, 0, 0);
+                    TEST_RESPONSE(MessageDiscoverResult, ERROR, 0, "");
                 } else {
                     TEST_RESPONSE(MessageDiscoverResult, NODATA, 0, "");
                 }
@@ -3097,7 +3121,7 @@ class TTestBlobStorageProxyBasic1 : public TTestBlobStorageProxy {
                 break;
             case 260:
                 if (Env->ShouldBeUndiscoverable) {
-                    TEST_RESPONSE(MessageDiscoverResult, ERROR, 0, 0);
+                    TEST_RESPONSE(MessageDiscoverResult, ERROR, 0, "");
                 } else {
                     TEST_RESPONSE(MessageDiscoverResult, OK, 1, testData2);
                 }
@@ -3106,7 +3130,7 @@ class TTestBlobStorageProxyBasic1 : public TTestBlobStorageProxy {
                 break;
             case 270:
                 if (Env->ShouldBeUndiscoverable) {
-                    TEST_RESPONSE(MessageDiscoverResult, ERROR, 0, 0);
+                    TEST_RESPONSE(MessageDiscoverResult, ERROR, 0, "");
                 } else {
                     TEST_RESPONSE(MessageDiscoverResult, OK, 1, "");
                 }
@@ -3116,7 +3140,7 @@ class TTestBlobStorageProxyBasic1 : public TTestBlobStorageProxy {
             case 280:
             {
                 if (Env->ShouldBeUndiscoverable) {
-                    TEST_RESPONSE(MessageDiscoverResult, ERROR, 0, 0);
+                    TEST_RESPONSE(MessageDiscoverResult, ERROR, 0, "");
                 } else {
                     TEST_RESPONSE(MessageDiscoverResult, NODATA, 0, "");
                 }
@@ -3404,9 +3428,25 @@ class TTestBlobStorageProxyBatchedPutRequestDoesNotContainAHugeBlob : public TTe
                 batched[1] = GetPut(blobIds[1], Data2);
 
                 TMaybe<TGroupStat::EKind> kind = PutHandleClassToGroupStatKind(HandleClass);
-                IActor *reqActor = CreateBlobStorageGroupPutRequest(BsInfo, GroupQueues,
-                        Mon, batched, false, PerDiskStatsPtr, kind,TInstant::Now(),
-                        StoragePoolCounters, HandleClass, Tactic, false);
+                IActor *reqActor = CreateBlobStorageGroupPutRequest(
+                        TBlobStorageGroupMultiPutParameters{
+                            .Common = {
+                                .GroupInfo = BsInfo,
+                                .GroupQueues = GroupQueues,
+                                .Mon = Mon,
+                                .Now = TMonotonic::Now(),
+                                .StoragePoolCounters = StoragePoolCounters,
+                                .RestartCounter = TBlobStorageGroupMultiPutParameters::CalculateRestartCounter(batched),
+                                .LatencyQueueKind = kind,
+                            },
+                            .Events = batched,
+                            .TimeStatsEnabled = false,
+                            .Stats = PerDiskStatsPtr,
+                            .HandleClass = HandleClass,
+                            .Tactic = Tactic,
+                            .EnableRequestMod3x3ForMinLatency = false,
+                            .AccelerationParams = TAccelerationParams{},
+                        });
 
                 ctx.Register(reqActor);
                 break;
@@ -4189,8 +4229,18 @@ public:
         TIntrusivePtr<TDsProxyNodeMon> dsProxyNodeMon(new TDsProxyNodeMon(counters, true));
         TDsProxyPerPoolCounters perPoolCounters(counters);
         TIntrusivePtr<TStoragePoolCounters> storagePoolCounters = perPoolCounters.GetPoolCounters("pool_name");
-        std::unique_ptr<IActor> proxyActor{CreateBlobStorageGroupProxyConfigured(TIntrusivePtr(bsInfo), false,
-            dsProxyNodeMon, TIntrusivePtr(storagePoolCounters), args.EnablePutBatching, DefaultEnableVPatch)};
+        TControlWrapper enablePutBatching(args.EnablePutBatching, false, true);
+        TControlWrapper enableVPatch(DefaultEnableVPatch, false, true);
+        std::unique_ptr<IActor> proxyActor{CreateBlobStorageGroupProxyConfigured(TIntrusivePtr(bsInfo), nullptr, false,
+                dsProxyNodeMon, TIntrusivePtr(storagePoolCounters),
+                TBlobStorageProxyParameters{
+                    .Controls = TBlobStorageProxyControlWrappers{
+                        .EnablePutBatching = enablePutBatching,
+                        .EnableVPatch = enableVPatch,
+                    }
+                }
+            )
+        };
         TActorSetupCmd bsproxySetup(proxyActor.release(), TMailboxType::Revolving, 3);
         setup1->LocalServices.push_back(std::pair<TActorId, TActorSetupCmd>(env->ProxyId, std::move(bsproxySetup)));
 

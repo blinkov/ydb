@@ -5,7 +5,8 @@
 #include <yt/yt/core/bus/public.h>
 
 #include <yt/yt/core/misc/fs.h>
-#include <yt/yt/core/misc/memory_usage_tracker.h>
+
+#include <library/cpp/yt/memory/memory_usage_tracker.h>
 
 namespace NYT {
 
@@ -34,6 +35,10 @@ public:
     TSharedRef Track(
         TSharedRef reference,
         bool keepHolder = false) override;
+    TErrorOr<TSharedRef> TryTrack(
+        TSharedRef reference,
+        bool keepHolder = false) override;
+
 private:
 
     class TTestTrackedReferenceHolder

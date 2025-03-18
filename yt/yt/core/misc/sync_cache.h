@@ -2,9 +2,10 @@
 
 #include "public.h"
 #include "cache_config.h"
-#include "memory_usage_tracker.h"
 
 #include <yt/yt/library/profiling/sensor.h>
+
+#include <library/cpp/yt/memory/memory_usage_tracker.h>
 
 #include <library/cpp/yt/threading/rw_spin_lock.h>
 
@@ -89,8 +90,8 @@ private:
         TIntrusiveListWithAutoDelete<TItem, TDelete> YoungerLruList;
         TIntrusiveListWithAutoDelete<TItem, TDelete> OlderLruList;
 
-        size_t YoungerWeightCounter = 0;
-        size_t OlderWeightCounter = 0;
+        i64 YoungerWeightCounter = 0;
+        i64 OlderWeightCounter = 0;
 
         THashMap<TKey, TItem*, THash> ItemMap;
 
@@ -119,7 +120,6 @@ private:
     void MoveToYounger(TShard* shard, TItem* item);
     void MoveToOlder(TShard* shard, TItem* item);
     void Pop(TShard* shard, TItem* item);
-
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -129,7 +129,7 @@ class TMemoryTrackingSyncSlruCacheBase
     : public TSyncSlruCacheBase<TKey, TValue, THash>
 {
 public:
-    explicit TMemoryTrackingSyncSlruCacheBase(
+    TMemoryTrackingSyncSlruCacheBase(
         TSlruCacheConfigPtr config,
         IMemoryUsageTrackerPtr memoryTracker,
         const NProfiling::TProfiler& profiler = {});
@@ -154,34 +154,31 @@ template <class TKey, class TValue, class THash = THash<TKey>>
 class TSimpleLruCache
 {
 public:
-    explicit TSimpleLruCache(size_t maxWeight);
+    explicit TSimpleLruCache(i64 maxWeight);
 
-    size_t GetSize() const;
+    int GetSize() const;
 
     const TValue& Get(const TKey& key);
     TValue* Find(const TKey& key);
     TValue* FindNoTouch(const TKey& key);
-    TValue* Insert(const TKey& key, TValue value, size_t weight = 1);
+    TValue* Insert(const TKey& key, TValue value, i64 weight = 1);
 
-    void SetMaxWeight(size_t maxWeight);
+    void SetMaxWeight(i64 maxWeight);
 
     void Clear();
 
 private:
     struct TItem
     {
-        TItem(TValue value, size_t weight)
-            : Value(std::move(value))
-            , Weight(weight)
-        { }
+        TItem(TValue value, i64 weight);
 
         TValue Value;
-        size_t Weight;
+        const i64 Weight;
         typename std::list<typename THashMap<TKey, TItem, THash>::iterator>::iterator LruListIterator;
     };
 
-    size_t MaxWeight_ = 0;
-    size_t CurrentWeight_ = 0;
+    i64 MaxWeight_ = 0;
+    i64 CurrentWeight_ = 0;
 
     using TItemMap = THashMap<TKey, TItem, THash>;
     TItemMap ItemMap_;
@@ -197,16 +194,15 @@ template <class TKey, class TValue, class THash = THash<TKey>>
 class TMultiLruCache
 {
 public:
-    explicit TMultiLruCache(size_t maxWeight);
+    explicit TMultiLruCache(i64 maxWeight);
 
-    size_t GetSize() const;
+    int GetSize() const;
 
     const TValue& Get(const TKey& key);
     TValue* Find(const TKey& key);
 
-    TValue* Insert(const TKey& key, TValue value, size_t weight = 1);
-    std::optional<TValue> Extract(const TKey& key);
-
+    TValue* Insert(const TKey& key, TValue value, i64 weight = 1);
+    std::optional<TValue> TryExtract(const TKey& key);
     TValue Pop();
 
     void Clear();
@@ -219,10 +215,10 @@ private:
 
     struct TItem
     {
-        TItem(TValue value, size_t weight);
+        TItem(TValue value, i64 weight);
 
         TValue Value;
-        size_t Weight;
+        const i64 Weight;
 
         typename TLruList::iterator LruListIterator;
     };
@@ -230,8 +226,8 @@ private:
     void UpdateLruList(typename std::deque<TItem>::iterator listIt);
 
 private:
-    size_t MaxWeight_ = 0;
-    size_t CurrentWeight_ = 0;
+    i64 MaxWeight_ = 0;
+    i64 CurrentWeight_ = 0;
 
     TItemMap ItemMap_;
     TLruList LruList_;

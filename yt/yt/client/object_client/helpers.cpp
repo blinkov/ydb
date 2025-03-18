@@ -21,6 +21,13 @@ bool IsScalarType(EObjectType type)
         type == EObjectType::BooleanNode;
 }
 
+bool IsSequoiaNode(NObjectClient::EObjectType type)
+{
+    return
+        type == EObjectType::SequoiaMapNode ||
+        type == EObjectType::SequoiaLink;
+}
+
 bool IsVersionedType(EObjectType type)
 {
     return
@@ -39,6 +46,7 @@ bool IsVersionedType(EObjectType type)
         type == EObjectType::ChunkMap ||
         type == EObjectType::LostChunkMap ||
         type == EObjectType::LostVitalChunkMap ||
+        type == EObjectType::LostVitalChunksSampleMap ||
         type == EObjectType::PrecariousChunkMap ||
         type == EObjectType::PrecariousVitalChunkMap ||
         type == EObjectType::OverreplicatedChunkMap ||
@@ -126,7 +134,8 @@ bool IsVersionedType(EObjectType type)
         type == EObjectType::SequoiaMapNode ||
         type == EObjectType::Pipeline ||
         type == EObjectType::QueueConsumer ||
-        type == EObjectType::QueueProducer;
+        type == EObjectType::QueueProducer ||
+        type == EObjectType::CypressProxyMap;
 }
 
 bool IsUserType(EObjectType type)
@@ -204,6 +213,7 @@ bool IsChunkOwnerType(EObjectType type)
 bool IsCellType(EObjectType type)
 {
     return
+        type == EObjectType::MasterCell ||
         type == EObjectType::TabletCell ||
         type == EObjectType::ChaosCell;
 }
@@ -285,9 +295,26 @@ bool IsUploadTransactionType(EObjectType type)
         type == EObjectType::UploadNestedTransaction;
 }
 
+bool IsExternalizedTransactionType(EObjectType type)
+{
+    return
+        type == EObjectType::ExternalizedTransaction ||
+        type == EObjectType::ExternalizedNestedTransaction;
+}
+
 bool IsCompositeNodeType(EObjectType type)
 {
-    return type == EObjectType::MapNode || type == EObjectType::ListNode;
+    return
+        type == EObjectType::SequoiaMapNode ||
+        type == EObjectType::MapNode ||
+        type == EObjectType::Scion ||
+        type == EObjectType::PortalExit ||
+        type == EObjectType::ListNode;
+}
+
+bool IsLinkType(EObjectType type)
+{
+    return type == EObjectType::Link || type == EObjectType::SequoiaLink;
 }
 
 bool HasSchema(EObjectType type)
@@ -304,6 +331,13 @@ bool HasSchema(EObjectType type)
 bool IsSchemaType(EObjectType type)
 {
     return (static_cast<ui32>(type) & SchemaObjectTypeMask) != 0;
+}
+
+std::string FormatObjectType(EObjectType type)
+{
+    return IsSchemaType(type)
+        ? std::string(Format("schema:%v", TypeFromSchemaType(type)))
+        : FormatEnum(type);
 }
 
 bool IsGlobalCellId(TCellId cellId)

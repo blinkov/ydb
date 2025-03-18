@@ -78,8 +78,7 @@ namespace NYT::NYTree {
 //   `func` only if `condition` is true;
 // * DoFor(TCollection collection, TFuncAny func) -> TAny, same as Do()
 //   but iterate over `collection` and pass each of its elements as a second
-//   argument to `func`. Instead of passing a collection you may it is possible
-//   to pass two iterators as an argument;
+//   argument to `func`. You may pass two iterators as an argument instead;
 //
 // * DoMap(TFuncMap func) -> TAny, open a map, delegate invocation to a separate
 //   procedure and close map;
@@ -88,7 +87,8 @@ namespace NYT::NYTree {
 //   and close map;
 // * DoList(TFuncList func) -> TAny, same as DoMap();
 // * DoListFor(TCollection collection, TFuncList func) -> TAny; same as DoMapFor().
-//
+// * DoAttributes(TFuncAttributes func) -> TAny, open attributes, delegate invocation
+//   to a separate procedure and close attributes;
 //
 // TFluentMap:
 // * Item(TStringBuf key) -> TAny, open an element keyed with `key`;
@@ -406,6 +406,14 @@ public:
             return TFluentAttributes<TAnyWithoutAttributes<TParent>>(
                 this->Consumer,
                 TAnyWithoutAttributes<TParent>(this->Consumer, std::move(this->Parent)));
+        }
+
+        TAnyWithoutAttributes<TParent> DoAttributes(auto funcMap)
+        {
+            this->Consumer->OnBeginAttributes();
+            InvokeFluentFunc<TFluentAttributes<TFluentYsonVoid>>(funcMap, this->Consumer);
+            this->Consumer->OnEndAttributes();
+            return TAnyWithoutAttributes<TParent>(this->Consumer, std::move(this->Parent));
         }
     };
 

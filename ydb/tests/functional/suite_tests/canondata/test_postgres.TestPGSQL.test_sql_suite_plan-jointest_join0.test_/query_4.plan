@@ -5,7 +5,7 @@
         "Plans": [
             {
                 "Node Type": "ResultSet",
-                "PlanNodeId": 8,
+                "PlanNodeId": 10,
                 "PlanNodeType": "ResultSet",
                 "Plans": [
                     {
@@ -14,18 +14,18 @@
                             {
                                 "Inputs": [
                                     {
-                                        "ExternalPlanNodeId": 6
+                                        "ExternalPlanNodeId": 8
                                     }
                                 ],
                                 "Limit": "1001",
                                 "Name": "Limit"
                             }
                         ],
-                        "PlanNodeId": 7,
+                        "PlanNodeId": 9,
                         "Plans": [
                             {
                                 "Node Type": "UnionAll",
-                                "PlanNodeId": 6,
+                                "PlanNodeId": 8,
                                 "PlanNodeType": "Connection",
                                 "Plans": [
                                     {
@@ -59,88 +59,97 @@
                                                     }
                                                 ],
                                                 "Name": "Filter",
-                                                "Predicate": "Not Exist(item.b.unique2) And item.a.ten == 2 Or item.b.hundred == 3"
+                                                "Predicate": "NOT Exist(item.b.unique2) AND item.a.ten == 2 OR item.b.hundred == 3"
                                             },
                                             {
-                                                "Condition": "unique2 = tenthous",
+                                                "Condition": "a.unique2 = b.tenthous",
                                                 "Inputs": [
                                                     {
-                                                        "ExternalPlanNodeId": 4
+                                                        "ExternalPlanNodeId": 6
                                                     },
                                                     {
-                                                        "ExternalPlanNodeId": 2
+                                                        "ExternalPlanNodeId": 5
                                                     }
                                                 ],
                                                 "Name": "LeftJoin (MapJoin)"
                                             }
                                         ],
-                                        "PlanNodeId": 5,
+                                        "PlanNodeId": 7,
                                         "Plans": [
                                             {
-                                                "KeyColumns": [
-                                                    "tenthous"
-                                                ],
-                                                "Node Type": "HashShuffle",
-                                                "PlanNodeId": 2,
+                                                "Node Type": "Broadcast",
+                                                "PlanNodeId": 5,
                                                 "PlanNodeType": "Connection",
                                                 "Plans": [
                                                     {
-                                                        "Node Type": "TableFullScan",
-                                                        "Operators": [
+                                                        "Node Type": "Stage",
+                                                        "PlanNodeId": 4,
+                                                        "Plans": [
                                                             {
-                                                                "Inputs": [],
-                                                                "Name": "TableFullScan",
-                                                                "ReadColumns": [
-                                                                    "hundred",
-                                                                    "tenthous",
-                                                                    "unique2"
-                                                                ],
-                                                                "ReadRanges": [
-                                                                    "unique1 (-\u221e, +\u221e)",
-                                                                    "unique2 (-\u221e, +\u221e)"
-                                                                ],
-                                                                "Scan": "Parallel",
-                                                                "Table": "postgres_jointest/join0.test_plan/tenk1"
+                                                                "Node Type": "UnionAll",
+                                                                "PlanNodeId": 3,
+                                                                "PlanNodeType": "Connection",
+                                                                "Plans": [
+                                                                    {
+                                                                        "Node Type": "Stage",
+                                                                        "PlanNodeId": 2,
+                                                                        "Plans": [
+                                                                            {
+                                                                                "Node Type": "TableFullScan",
+                                                                                "Operators": [
+                                                                                    {
+                                                                                        "Inputs": [],
+                                                                                        "Name": "TableFullScan",
+                                                                                        "Path": "/Root/postgres_jointest/join0.test_plan/tenk1",
+                                                                                        "ReadColumns": [
+                                                                                            "hundred",
+                                                                                            "tenthous",
+                                                                                            "unique2"
+                                                                                        ],
+                                                                                        "ReadRanges": [
+                                                                                            "unique1 (-\u221e, +\u221e)",
+                                                                                            "unique2 (-\u221e, +\u221e)"
+                                                                                        ],
+                                                                                        "ReadRangesPointPrefixLen": "0",
+                                                                                        "Scan": "Parallel",
+                                                                                        "Table": "postgres_jointest/join0.test_plan/tenk1"
+                                                                                    }
+                                                                                ],
+                                                                                "PlanNodeId": 1,
+                                                                                "Tables": [
+                                                                                    "postgres_jointest/join0.test_plan/tenk1"
+                                                                                ]
+                                                                            }
+                                                                        ]
+                                                                    }
+                                                                ]
                                                             }
-                                                        ],
-                                                        "PlanNodeId": 1,
-                                                        "Tables": [
-                                                            "postgres_jointest/join0.test_plan/tenk1"
                                                         ]
                                                     }
                                                 ]
                                             },
                                             {
-                                                "KeyColumns": [
-                                                    "unique2"
-                                                ],
-                                                "Node Type": "HashShuffle",
-                                                "PlanNodeId": 4,
-                                                "PlanNodeType": "Connection",
-                                                "Plans": [
+                                                "Node Type": "TableRangeScan",
+                                                "Operators": [
                                                     {
-                                                        "Node Type": "TableRangeScan",
-                                                        "Operators": [
-                                                            {
-                                                                "Inputs": [],
-                                                                "Name": "TableRangeScan",
-                                                                "ReadColumns": [
-                                                                    "ten",
-                                                                    "unique2"
-                                                                ],
-                                                                "ReadRange": [
-                                                                    "unique1 (42)",
-                                                                    "unique2 (-\u221e, +\u221e)"
-                                                                ],
-                                                                "Scan": "Parallel",
-                                                                "Table": "postgres_jointest/join0.test_plan/tenk1"
-                                                            }
+                                                        "Inputs": [],
+                                                        "Name": "TableRangeScan",
+                                                        "Path": "/Root/postgres_jointest/join0.test_plan/tenk1",
+                                                        "ReadColumns": [
+                                                            "ten",
+                                                            "unique2"
                                                         ],
-                                                        "PlanNodeId": 3,
-                                                        "Tables": [
-                                                            "postgres_jointest/join0.test_plan/tenk1"
-                                                        ]
+                                                        "ReadRange": [
+                                                            "unique1 (42)",
+                                                            "unique2 (-\u221e, +\u221e)"
+                                                        ],
+                                                        "Scan": "Parallel",
+                                                        "Table": "postgres_jointest/join0.test_plan/tenk1"
                                                     }
+                                                ],
+                                                "PlanNodeId": 6,
+                                                "Tables": [
+                                                    "postgres_jointest/join0.test_plan/tenk1"
                                                 ]
                                             }
                                         ]
@@ -151,7 +160,10 @@
                     }
                 ]
             }
-        ]
+        ],
+        "Stats": {
+            "ResourcePoolId": "default"
+        }
     },
     "meta": {
         "type": "query",

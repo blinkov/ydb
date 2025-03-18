@@ -30,6 +30,46 @@ void PrepareSensitiveFields(::FederatedQuery::Connection& connection, bool extra
 
 }
 
+NYql::TIssues TControlPlaneStorageBase::ValidateRequest(TEvControlPlaneStorage::TEvCreateConnectionRequest::TPtr& ev) const
+{
+    NYql::TIssues issues = ValidateConnection(ev);
+
+    const auto& event = *ev->Get();
+    const auto& permissions = GetCreateConnectionPerimssions(event);
+    if (event.Request.content().acl().visibility() == FederatedQuery::Acl::SCOPE && !permissions.Check(TPermissions::MANAGE_PUBLIC)) {
+        issues.AddIssue(MakeErrorIssue(TIssuesIds::ACCESS_DENIED, "Permission denied to create a connection with these parameters. Please receive a permission yq.resources.managePublic"));
+    }
+
+    return issues;
+}
+
+TPermissions TControlPlaneStorageBase::GetCreateConnectionPerimssions(const TEvControlPlaneStorage::TEvCreateConnectionRequest& event) const
+{
+    TPermissions permissions = Config->Proto.GetEnablePermissions()
+                            ? event.Permissions
+                            : TPermissions{TPermissions::MANAGE_PUBLIC};
+    if (IsSuperUser(event.User)) {
+        permissions.SetAll();
+    }
+    return permissions;
+}
+
+std::pair<FederatedQuery::Connection, FederatedQuery::Internal::ConnectionInternal> TControlPlaneStorageBase::GetCreateConnectionProtos(
+    const FederatedQuery::CreateConnectionRequest& request, const TString& cloudId, const TString& user, TInstant startTime) const
+{
+    const TString& connectionId = GetEntityIdAsString(Config->IdsPrefix, EEntityType::CONNECTION);
+
+    FederatedQuery::Connection connection;
+    FederatedQuery::ConnectionContent& content = *connection.mutable_content();
+    content = request.content();
+    *connection.mutable_meta() = CreateCommonMeta(connectionId, user, startTime, InitialRevision);
+
+    FederatedQuery::Internal::ConnectionInternal connectionInternal;
+    connectionInternal.set_cloud_id(cloudId);
+
+    return {connection, connectionInternal};
+}
+
 void TYdbControlPlaneStorageActor::Handle(TEvControlPlaneStorage::TEvCreateConnectionRequest::TPtr& ev)
 {
     TInstant startTime = TInstant::Now();
@@ -43,25 +83,18 @@ void TYdbControlPlaneStorageActor::Handle(TEvControlPlaneStorage::TEvCreateConne
     const TString user = event.User;
     const TString token = event.Token;
     const int byteSize = request.ByteSize();
-    TPermissions permissions = Config->Proto.GetEnablePermissions()
-                            ? event.Permissions
-                            : TPermissions{TPermissions::MANAGE_PUBLIC};
-    if (IsSuperUser(user)) {
-        permissions.SetAll();
-    }
     const TString idempotencyKey = request.idempotency_key();
-    const TString connectionId = GetEntityIdAsString(Config->IdsPrefix, EEntityType::CONNECTION);
+
+    const auto [connection, connectionInternal] = GetCreateConnectionProtos(request, cloudId, user, startTime);
+    const auto& content = connection.content();
+    const TString& connectionId = connection.meta().id();
 
     CPS_LOG_T(MakeLogPrefix(scope, user, connectionId)
         << "CreateConnectionRequest: "
         << NKikimr::MaskTicket(token) << " "
         << request.DebugString());
 
-    NYql::TIssues issues = ValidateConnection(ev);
-    if (request.content().acl().visibility() == FederatedQuery::Acl::SCOPE && !permissions.Check(TPermissions::MANAGE_PUBLIC)) {
-        issues.AddIssue(MakeErrorIssue(TIssuesIds::ACCESS_DENIED, "Permission denied to create a connection with these parameters. Please receive a permission yq.resources.managePublic"));
-    }
-    if (issues) {
+    if (const auto& issues = ValidateRequest(ev)) {
         CPS_LOG_D(MakeLogPrefix(scope, user, connectionId)
             << "CreateConnectionRequest, validation failed: "
             << NKikimr::MaskTicket(token) << " "
@@ -72,14 +105,6 @@ void TYdbControlPlaneStorageActor::Handle(TEvControlPlaneStorage::TEvCreateConne
         LWPROBE(CreateConnectionRequest, scope, user, delta, byteSize, false);
         return;
     }
-
-    FederatedQuery::Connection connection;
-    FederatedQuery::ConnectionContent& content = *connection.mutable_content();
-    content = request.content();
-    *connection.mutable_meta() = CreateCommonMeta(connectionId, user, startTime, InitialRevision);
-
-    FederatedQuery::Internal::ConnectionInternal connectionInternal;
-    connectionInternal.set_cloud_id(cloudId);
 
     std::shared_ptr<std::pair<FederatedQuery::CreateConnectionResult, TAuditDetails<FederatedQuery::Connection>>> response = std::make_shared<std::pair<FederatedQuery::CreateConnectionResult, TAuditDetails<FederatedQuery::Connection>>>();
     response->first.set_connection_id(connectionId);
@@ -141,7 +166,7 @@ void TYdbControlPlaneStorageActor::Handle(TEvControlPlaneStorage::TEvCreateConne
         auto overridBindingValidator = CreateConnectionOverrideBindingValidator(
             scope,
             content.name(),
-            permissions,
+            GetCreateConnectionPerimssions(event),
             user,
             YdbConnection->TablePathPrefix);
         validators.push_back(overridBindingValidator);
@@ -266,7 +291,7 @@ void TYdbControlPlaneStorageActor::Handle(TEvControlPlaneStorage::TEvListConnect
     auto [result, resultSets] = Read(query.Sql, query.Params, requestCounters, debugInfo);
     auto prepare = [resultSets=resultSets, limit, extractSensitiveFields, commonCounters=requestCounters.Common] {
         if (resultSets->size() != 1) {
-            ythrow TCodeLineException(TIssuesIds::INTERNAL_ERROR) << "Result set size is not equal to 1 but equal " << resultSets->size() << ". Please contact internal support";
+            ythrow NYql::TCodeLineException(TIssuesIds::INTERNAL_ERROR) << "Result set size is not equal to 1 but equal " << resultSets->size() << ". Please contact internal support";
         }
 
         FederatedQuery::ListConnectionsResult result;
@@ -275,7 +300,7 @@ void TYdbControlPlaneStorageActor::Handle(TEvControlPlaneStorage::TEvListConnect
             auto& connection = *result.add_connection();
             if (!connection.ParseFromString(*parser.ColumnParser(CONNECTION_COLUMN_NAME).GetOptionalString())) {
                 commonCounters->ParseProtobufError->Inc();
-                ythrow TCodeLineException(TIssuesIds::INTERNAL_ERROR) << "Error parsing proto message for connection. Please contact internal support";
+                ythrow NYql::TCodeLineException(TIssuesIds::INTERNAL_ERROR) << "Error parsing proto message for connection. Please contact internal support";
             }
             PrepareSensitiveFields(connection, extractSensitiveFields);
         }
@@ -358,23 +383,23 @@ void TYdbControlPlaneStorageActor::Handle(TEvControlPlaneStorage::TEvDescribeCon
     auto [result, resultSets] = Read(query.Sql, query.Params, requestCounters, debugInfo);
     auto prepare = [=, resultSets=resultSets, commonCounters=requestCounters.Common] {
         if (resultSets->size() != 1) {
-            ythrow TCodeLineException(TIssuesIds::INTERNAL_ERROR) << "Result set size is not equal to 1 but equal " << resultSets->size() << ". Please contact internal support";
+            ythrow NYql::TCodeLineException(TIssuesIds::INTERNAL_ERROR) << "Result set size is not equal to 1 but equal " << resultSets->size() << ". Please contact internal support";
         }
 
         FederatedQuery::DescribeConnectionResult result;
         TResultSetParser parser(resultSets->front());
         if (!parser.TryNextRow()) {
-            ythrow TCodeLineException(TIssuesIds::ACCESS_DENIED) << "Connection does not exist or permission denied. Please check the id connection or your access rights";
+            ythrow NYql::TCodeLineException(TIssuesIds::ACCESS_DENIED) << "Connection does not exist or permission denied. Please check the id connection or your access rights";
         }
 
         if (!result.mutable_connection()->ParseFromString(*parser.ColumnParser(CONNECTION_COLUMN_NAME).GetOptionalString())) {
             commonCounters->ParseProtobufError->Inc();
-            ythrow TCodeLineException(TIssuesIds::INTERNAL_ERROR) << "Error parsing proto message for connection. Please contact internal support";
+            ythrow NYql::TCodeLineException(TIssuesIds::INTERNAL_ERROR) << "Error parsing proto message for connection. Please contact internal support";
         }
 
         bool hasViewAccess = HasViewAccess(permissions, result.connection().content().acl().visibility(), result.connection().meta().created_by(), user);
         if (!hasViewAccess) {
-            ythrow TCodeLineException(TIssuesIds::ACCESS_DENIED) << "Connection does not exist or permission denied. Please check the id connection or your access rights";
+            ythrow NYql::TCodeLineException(TIssuesIds::ACCESS_DENIED) << "Connection does not exist or permission denied. Please check the id connection or your access rights";
         }
 
         PrepareSensitiveFields(*result.mutable_connection(), extractSensitiveFields);
@@ -447,20 +472,20 @@ void TYdbControlPlaneStorageActor::Handle(TEvControlPlaneStorage::TEvModifyConne
     );
 
     std::shared_ptr<std::pair<FederatedQuery::ModifyConnectionResult, TAuditDetails<FederatedQuery::Connection>>> response = std::make_shared<std::pair<FederatedQuery::ModifyConnectionResult, TAuditDetails<FederatedQuery::Connection>>>();
-    auto prepareParams = [=, config=Config, commonCounters=requestCounters.Common](const TVector<TResultSet>& resultSets) {
+    auto prepareParams = [=, config=Config, commonCounters=requestCounters.Common](const std::vector<TResultSet>& resultSets) {
         if (resultSets.size() != 1) {
-            ythrow TCodeLineException(TIssuesIds::INTERNAL_ERROR) << "Result set size is not equal to 1 but equal " << resultSets.size() << ". Please contact internal support";
+            ythrow NYql::TCodeLineException(TIssuesIds::INTERNAL_ERROR) << "Result set size is not equal to 1 but equal " << resultSets.size() << ". Please contact internal support";
         }
 
         TResultSetParser parser(resultSets.front());
         if (!parser.TryNextRow()) {
-            ythrow TCodeLineException(TIssuesIds::ACCESS_DENIED) << "Connection does not exist or permission denied. Please check the id connection or your access rights";
+            ythrow NYql::TCodeLineException(TIssuesIds::ACCESS_DENIED) << "Connection does not exist or permission denied. Please check the id connection or your access rights";
         }
 
         FederatedQuery::Connection connection;
         if (!connection.ParseFromString(*parser.ColumnParser(CONNECTION_COLUMN_NAME).GetOptionalString())) {
             commonCounters->ParseProtobufError->Inc();
-            ythrow TCodeLineException(TIssuesIds::INTERNAL_ERROR) << "Error parsing proto message for connection. Please contact internal support";
+            ythrow NYql::TCodeLineException(TIssuesIds::INTERNAL_ERROR) << "Error parsing proto message for connection. Please contact internal support";
         }
 
         auto& meta = *connection.mutable_meta();
@@ -473,11 +498,11 @@ void TYdbControlPlaneStorageActor::Handle(TEvControlPlaneStorage::TEvModifyConne
         bool validateType = content.setting().connection_case() == request.content().setting().connection_case();
 
         if (!validateType) {
-            ythrow TCodeLineException(TIssuesIds::BAD_REQUEST) << "Connection type cannot be changed. Please specify the same connection type";
+            ythrow NYql::TCodeLineException(TIssuesIds::BAD_REQUEST) << "Connection type cannot be changed. Please specify the same connection type";
         }
 
         if (content.acl().visibility() == FederatedQuery::Acl::SCOPE && request.content().acl().visibility() == FederatedQuery::Acl::PRIVATE) {
-            ythrow TCodeLineException(TIssuesIds::BAD_REQUEST) << "Changing visibility from SCOPE to PRIVATE is forbidden. Please create a new connection with visibility PRIVATE";
+            ythrow NYql::TCodeLineException(TIssuesIds::BAD_REQUEST) << "Changing visibility from SCOPE to PRIVATE is forbidden. Please create a new connection with visibility PRIVATE";
         }
 
         // FIXME: this code needs better generalization

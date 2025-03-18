@@ -2,7 +2,7 @@
 
 PY3_LIBRARY()
 
-VERSION(24.1)
+VERSION(25.0.1)
 
 LICENSE(MIT)
 
@@ -10,6 +10,7 @@ NO_LINT()
 
 NO_CHECK_IMPORTS(
     pip.__pip-runner__
+    pip._internal.locations._distutils
     pip._vendor.*
 )
 
@@ -142,7 +143,6 @@ PY_SRCS(
     pip/_internal/utils/deprecation.py
     pip/_internal/utils/direct_url_helpers.py
     pip/_internal/utils/egg_link.py
-    pip/_internal/utils/encoding.py
     pip/_internal/utils/entrypoints.py
     pip/_internal/utils/filesystem.py
     pip/_internal/utils/filetypes.py
@@ -151,6 +151,7 @@ PY_SRCS(
     pip/_internal/utils/logging.py
     pip/_internal/utils/misc.py
     pip/_internal/utils/packaging.py
+    pip/_internal/utils/retry.py
     pip/_internal/utils/setuptools_build.py
     pip/_internal/utils/subprocess.py
     pip/_internal/utils/temp_dir.py
@@ -216,6 +217,8 @@ PY_SRCS(
     pip/_vendor/packaging/_parser.py
     pip/_vendor/packaging/_structures.py
     pip/_vendor/packaging/_tokenizer.py
+    pip/_vendor/packaging/licenses/__init__.py
+    pip/_vendor/packaging/licenses/_spdx.py
     pip/_vendor/packaging/markers.py
     pip/_vendor/packaging/metadata.py
     pip/_vendor/packaging/requirements.py
@@ -269,7 +272,6 @@ PY_SRCS(
     pip/_vendor/pygments/unistring.py
     pip/_vendor/pygments/util.py
     pip/_vendor/pyproject_hooks/__init__.py
-    pip/_vendor/pyproject_hooks/_compat.py
     pip/_vendor/pyproject_hooks/_impl.py
     pip/_vendor/pyproject_hooks/_in_process/__init__.py
     pip/_vendor/pyproject_hooks/_in_process/_in_process.py
@@ -375,17 +377,6 @@ PY_SRCS(
     pip/_vendor/rich/themes.py
     pip/_vendor/rich/traceback.py
     pip/_vendor/rich/tree.py
-    pip/_vendor/tenacity/__init__.py
-    pip/_vendor/tenacity/_asyncio.py
-    pip/_vendor/tenacity/_utils.py
-    pip/_vendor/tenacity/after.py
-    pip/_vendor/tenacity/before.py
-    pip/_vendor/tenacity/before_sleep.py
-    pip/_vendor/tenacity/nap.py
-    pip/_vendor/tenacity/retry.py
-    pip/_vendor/tenacity/stop.py
-    pip/_vendor/tenacity/tornadoweb.py
-    pip/_vendor/tenacity/wait.py
     pip/_vendor/tomli/__init__.py
     pip/_vendor/tomli/_parser.py
     pip/_vendor/tomli/_re.py
@@ -450,9 +441,9 @@ RESOURCE_FILES(
     pip/_vendor/idna/py.typed
     pip/_vendor/packaging/py.typed
     pip/_vendor/platformdirs/py.typed
+    pip/_vendor/pyproject_hooks/py.typed
     pip/_vendor/resolvelib/py.typed
     pip/_vendor/rich/py.typed
-    pip/_vendor/tenacity/py.typed
     pip/_vendor/tomli/py.typed
     pip/_vendor/truststore/py.typed
     pip/_vendor/vendor.txt

@@ -5,6 +5,7 @@
 #include "hive.h"
 #include "tablet_info.h"
 #include "node_info.h"
+#include "leader_tablet_info.h"
 
 namespace NKikimr {
 namespace NHive {
@@ -33,6 +34,10 @@ struct TEvPrivate {
         EvStorageBalancerOut,
         EvDeleteNode,
         EvCanMoveTablets,
+        EvUpdateDataCenterFollowers,
+        EvGenerateTestData,
+        EvRefreshScaleRecommendation,
+        EvUpdateFollowers,
         EvEnd
     };
 
@@ -68,12 +73,14 @@ struct TEvPrivate {
     struct TEvUnlockTabletReconnectTimeout : TEventLocal<TEvUnlockTabletReconnectTimeout, EvUnlockTabletReconnectTimeout> {
         ui64 TabletId;
         ui64 SeqNo;
+        NKikimrHive::ELockLostReason Reason;
 
         TEvUnlockTabletReconnectTimeout() = default;
 
-        explicit TEvUnlockTabletReconnectTimeout(ui64 tabletId, ui64 seqNo)
-            : TabletId(tabletId)
-            , SeqNo(seqNo)
+        explicit TEvUnlockTabletReconnectTimeout(const TLeaderTabletInfo& tablet, NKikimrHive::ELockLostReason reason)
+            : TabletId(tablet.Id)
+            , SeqNo(tablet.PendingUnlockSeqNo)
+            , Reason(reason)
         {}
     };
 
@@ -120,6 +127,19 @@ struct TEvPrivate {
     };
 
     struct TEvCanMoveTablets : TEventLocal<TEvCanMoveTablets, EvCanMoveTablets> {};
+
+    struct TEvUpdateDataCenterFollowers : TEventLocal<TEvUpdateDataCenterFollowers, EvUpdateDataCenterFollowers> {
+        TDataCenterId DataCenter;
+
+        TEvUpdateDataCenterFollowers(TDataCenterId dataCenter) : DataCenter(dataCenter) {};
+    };
+
+    struct TEvGenerateTestData : TEventLocal<TEvGenerateTestData, EvGenerateTestData> {};
+  
+    struct TEvRefreshScaleRecommendation : TEventLocal<TEvRefreshScaleRecommendation, EvRefreshScaleRecommendation> {};
+
+    struct TEvUpdateFollowers : TEventLocal<TEvUpdateFollowers, EvUpdateFollowers> {
+    };
 };
 
 } // NHive

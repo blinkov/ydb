@@ -138,6 +138,16 @@ public:
             Tenant->PlanResolution = rec.options().plan_resolution();
         }
 
+        if (rec.options().coordinators()) {
+            Tenant->Coordinators = rec.options().coordinators();
+        } else if (rec.resources_kind_case() == Ydb::Cms::CreateDatabaseRequest::kServerlessResources) {
+            Tenant->Coordinators = 1;
+        }
+
+        if (rec.options().mediators()) {
+            Tenant->Mediators = rec.options().mediators();
+        }
+
         if (rec.options().disable_tx_service()) {
             Tenant->Coordinators = 0;
             Tenant->Mediators = 0;
@@ -251,7 +261,6 @@ public:
 
                     Tenant->IsExternalHive = false;
                     Tenant->IsGraphShardEnabled = false;
-                    Tenant->Coordinators = 1;
                     Tenant->SlotsAllocationConfirmed = true;
                 } else {
                     return Error(Ydb::StatusIds::BAD_REQUEST,
@@ -298,6 +307,49 @@ public:
 
             }
             Tenant->DatabaseQuotas.ConstructInPlace(quotas);
+        }
+
+        if (rec.has_scale_recommender_policies()) {
+            if (!Self->FeatureFlags.GetEnableScaleRecommender()) {
+                return Error(Ydb::StatusIds::UNSUPPORTED, "Feature flag EnableScaleRecommender is off", ctx);
+            }
+
+            const auto& policies = rec.scale_recommender_policies();
+            if (policies.policies().size() > 1) {
+                return Error(Ydb::StatusIds::BAD_REQUEST, "Currently, no more than one policy is supported at a time", ctx);
+            }
+
+            if (!policies.policies().empty()) {
+                using enum Ydb::Cms::ScaleRecommenderPolicies_ScaleRecommenderPolicy_TargetTrackingPolicy::TargetCase;
+                using enum Ydb::Cms::ScaleRecommenderPolicies_ScaleRecommenderPolicy::PolicyCase;
+
+                const auto& policy = policies.policies()[0];
+                switch (policy.GetPolicyCase()) {
+                    case kTargetTrackingPolicy: {
+                        const auto& targetTracking = policy.target_tracking_policy();
+                        switch (targetTracking.GetTargetCase()) {
+                            case kAverageCpuUtilizationPercent: {
+                                auto cpuUtilization = targetTracking.average_cpu_utilization_percent();
+                                if (cpuUtilization < 10 || cpuUtilization > 90) {
+                                    return Error(Ydb::StatusIds::BAD_REQUEST, "Average CPU utilization target must be from 10% to 90%", ctx);
+                                }
+                                break;
+                            }
+                            case TARGET_NOT_SET:
+                                return Error(Ydb::StatusIds::BAD_REQUEST, "Target type for target tracking policy is not set", ctx);
+                            default:
+                                return Error(Ydb::StatusIds::BAD_REQUEST, "Unsupported target type for target tracking policy", ctx);
+                            }
+                        break;
+                    }
+                    case POLICY_NOT_SET:
+                        return Error(Ydb::StatusIds::BAD_REQUEST, "Policy type is not set", ctx);
+                    default:
+                        return Error(Ydb::StatusIds::BAD_REQUEST, "Unsupported policy type", ctx);
+                }
+            }
+            Tenant->ScaleRecommenderPolicies.ConstructInPlace(policies);
+            Tenant->ScaleRecommenderPoliciesConfirmed = false;
         }
 
         if (rec.idempotency_key()) {

@@ -35,7 +35,7 @@ public:
         return NKikimrServices::TActivity::GRPC_REQ;
     }
 
-    TFetchScriptResultsRPC(TEvFetchScriptResultsRequest* request)
+    TFetchScriptResultsRPC(IRequestNoOpCtx* request)
         : TRpcRequestActorBase(request)
     {}
 
@@ -57,7 +57,7 @@ public:
         }
 
         RowsOffset = 0;
-        if (!req->fetch_token().Empty()) {
+        if (!req->fetch_token().empty()) {
             auto fetch_token = TryFromString<ui64>(req->fetch_token());
             if (fetch_token) {
                 RowsOffset = *fetch_token;
@@ -71,7 +71,7 @@ public:
             return;
         }
 
-        Register(NKqp::CreateGetScriptExecutionResultActor(SelfId(), DatabaseName, ExecutionId, req->result_set_index(), RowsOffset, req->rows_limit(), req->rows_limit() ? 0 : MAX_SIZE_LIMIT, Request->GetDeadline()));
+        Register(NKqp::CreateGetScriptExecutionResultActor(SelfId(), GetDatabaseName(), ExecutionId, req->result_set_index(), RowsOffset, req->rows_limit(), req->rows_limit() ? 0 : MAX_SIZE_LIMIT, Request->GetDeadline()));
 
         Become(&TFetchScriptResultsRPC::StateFunc);
     }
@@ -108,10 +108,7 @@ private:
 
         result.set_status(status);
 
-        TString serializedResult;
-        Y_PROTOBUF_SUPPRESS_NODISCARD result.SerializeToString(&serializedResult);
-
-        Request->SendSerializedResult(std::move(serializedResult), status);
+        TProtoResponseHelper::SendProtoResponse(result, status, Request);
 
         PassAway();
     }
@@ -128,13 +125,18 @@ private:
     }
 
     bool GetExecutionIdFromRequest() {
-        TMaybe<TString> executionId = NKqp::ScriptExecutionIdFromOperation(GetProtoRequest()->operation_id());
-        if (!executionId) {
-            Reply(Ydb::StatusIds::BAD_REQUEST, "Invalid operation id");
+        try {
+            TMaybe<TString> executionId = NKqp::ScriptExecutionIdFromOperation(GetProtoRequest()->operation_id());
+            if (!executionId) {
+                Reply(Ydb::StatusIds::BAD_REQUEST, "Invalid operation id");
+                return false;
+            }
+            ExecutionId = *executionId;
+            return true;
+        } catch (const std::exception& ex) {
+            Reply(Ydb::StatusIds::BAD_REQUEST, TStringBuilder() << "Invalid operation id: " << ex.what());
             return false;
         }
-        ExecutionId = *executionId;
-        return true;
     }
 
 private:
@@ -152,6 +154,11 @@ void DoFetchScriptResults(std::unique_ptr<IRequestNoOpCtx> p, const IFacilityPro
     f.RegisterActor(new TFetchScriptResultsRPC(req));
 }
 
+}
+
+template<>
+IActor* TEvFetchScriptResultsRequest::CreateRpcActor(IRequestNoOpCtx* msg) {
+    return new TFetchScriptResultsRPC(msg);
 }
 
 } // namespace NKikimr::NGRpcService

@@ -54,7 +54,7 @@ public:
         , Logger(logger)
     { }
 
-    const TString& GetEndpointDescription() const override
+    const std::string& GetEndpointDescription() const override
     {
         return EndpointAddress_;
     }
@@ -64,7 +64,7 @@ public:
         return *EndpointAttributes_;
     }
 
-    const TString& GetEndpointAddress() const override
+    const std::string& GetEndpointAddress() const override
     {
         return EndpointAddress_;
     }
@@ -116,7 +116,7 @@ public:
 
         YT_VERIFY(message.Size() >= 2);
         if (responseHeader.has_format()) {
-            auto format = CheckedEnumCast<EMessageFormat>(responseHeader.format());
+            auto format = FromProto<EMessageFormat>(responseHeader.format());
             Rsp_->GetHeaders()->Add("Content-Type", ToHttpContentType(format));
         }
 
@@ -228,7 +228,6 @@ private:
     const TString BaseUrl_;
     const NLogging::TLogger Logger;
 
-
     TError TranslateRequest(const IRequestPtr& req, NRpc::NProto::TRequestHeader* rpcHeader, TRequestId* requestId)
     {
         using namespace NYT::NHttp::NHeaders;
@@ -238,47 +237,42 @@ private:
         }
 
         const auto& url = req->GetUrl();
-        if (url.Path.Size() <= BaseUrl_.Size()) {
+        if (url.Path.size() <= BaseUrl_.size()) {
             return TError("Invalid URL");
         }
 
         ToProto(rpcHeader->mutable_service(), Underlying_->GetServiceId().ServiceName);
-        ToProto(rpcHeader->mutable_method(), url.Path.substr(BaseUrl_.Size()));
+        ToProto(rpcHeader->mutable_method(), url.Path.substr(BaseUrl_.size()));
 
         const auto& httpHeaders = req->GetHeaders();
 
-        auto contentTypeString = httpHeaders->Find(ContentTypeHeaderName);
-        if (contentTypeString) {
+        if (const auto* contentTypeString = httpHeaders->Find(ContentTypeHeaderName)) {
             auto decodedType = FromHttpContentType(*contentTypeString);
             if (!decodedType) {
                 return TError("Invalid \"Content-Type\" header value")
                     << TErrorAttribute("value", *contentTypeString);
             }
-            rpcHeader->set_request_format(static_cast<i32>(*decodedType));
+            rpcHeader->set_request_format(ToProto(*decodedType));
         }
 
-        auto requestFormatOptionsYson = httpHeaders->Find(RequestFormatOptionsHeaderName);
-        if (requestFormatOptionsYson) {
+        if (const auto* requestFormatOptionsYson = httpHeaders->Find(RequestFormatOptionsHeaderName)) {
             rpcHeader->set_request_format_options(*requestFormatOptionsYson);
         }
 
-        auto acceptString = httpHeaders->Find(AcceptHeaderName);
-        if (acceptString) {
+        if (const auto* acceptString = httpHeaders->Find(AcceptHeaderName)) {
             auto decodedType = FromHttpContentType(*acceptString);
             if (!decodedType) {
                 return TError("Invalid \"Accept\" header value")
                     << TErrorAttribute("value", *acceptString);
             }
-            rpcHeader->set_response_format(static_cast<i32>(*decodedType));
+            rpcHeader->set_response_format(ToProto(*decodedType));
         }
 
-        auto responseFormatOptionsYson = httpHeaders->Find(ResponseFormatOptionsHeaderName);
-        if (responseFormatOptionsYson) {
+        if (const auto* responseFormatOptionsYson = httpHeaders->Find(ResponseFormatOptionsHeaderName)) {
             rpcHeader->set_response_format_options(*responseFormatOptionsYson);
         }
 
-        auto requestIdString = httpHeaders->Find(RequestIdHeaderName);
-        if (requestIdString) {
+        if (const auto* requestIdString = httpHeaders->Find(RequestIdHeaderName)) {
             if (!TRequestId::FromString(*requestIdString, requestId)) {
                 return TError("Invalid %Qv header value", RequestIdHeaderName)
                     << TErrorAttribute("value", *requestIdString);
@@ -292,8 +286,7 @@ private:
             return rpcHeader->MutableExtension(NRpc::NProto::TCredentialsExt::credentials_ext);
         };
 
-        auto authorizationString = httpHeaders->Find(AuthorizationHeaderName);
-        if (authorizationString) {
+        if (const auto* authorizationString = httpHeaders->Find(AuthorizationHeaderName)) {
             const TStringBuf Prefix = "OAuth ";
             if (!authorizationString->StartsWith(Prefix)) {
                 return TError("Invalid \"Authorization\" header value");
@@ -301,13 +294,15 @@ private:
             getCredentialsExt()->set_token(TrimLeadingWhitespaces(authorizationString->substr(Prefix.length())));
         }
 
-        auto userTicketString = httpHeaders->Find(UserTicketHeaderName);
-        if (userTicketString) {
+        if (const auto* userTicketString = httpHeaders->Find(UserTicketHeaderName)) {
             getCredentialsExt()->set_user_ticket(TrimLeadingWhitespaces(*userTicketString));
         }
 
-        auto cookieString = httpHeaders->Find(CookieHeaderName);
-        if (cookieString) {
+        if (const auto* serviceTicketString = httpHeaders->Find(ServiceTicketHeaderName)) {
+            getCredentialsExt()->set_service_ticket(TrimLeadingWhitespaces(*serviceTicketString));
+        }
+
+        if (const auto* cookieString = httpHeaders->Find(CookieHeaderName)) {
             auto cookieMap = ParseCookies(*cookieString);
 
             static const TString SessionIdCookieName("Session_id");
@@ -323,34 +318,29 @@ private:
             }
         }
 
-        auto userAgent = httpHeaders->Find(UserAgentHeaderName);
-        if (userAgent) {
+        if (const auto* userAgent = httpHeaders->Find(UserAgentHeaderName)) {
             rpcHeader->set_user_agent(*userAgent);
         }
 
-        auto user = httpHeaders->Find(UserNameHeaderName);
-        if (user) {
+        if (const auto* user = httpHeaders->Find(UserNameHeaderName)) {
             rpcHeader->set_user(*user);
         }
 
-        auto userTag = httpHeaders->Find(UserTagHeaderName);
-        if (userTag) {
+        if (const auto* userTag = httpHeaders->Find(UserTagHeaderName)) {
             rpcHeader->set_user_tag(*userTag);
         }
 
-        if (auto requestTimeout = httpHeaders->Find(RequestTimeoutHeaderName)) {
-            rpcHeader->set_timeout(ToProto<i64>(TDuration::Seconds(FromString<i64>(*requestTimeout))));
-        } else if (auto xRequestTimeout = httpHeaders->Find(XRequestTimeoutHeaderName)) {
-            rpcHeader->set_timeout(ToProto<i64>(TDuration::MilliSeconds(FromString<i64>(*xRequestTimeout))));
+        if (const auto* requestTimeout = httpHeaders->Find(RequestTimeoutHeaderName)) {
+            rpcHeader->set_timeout(ToProto(TDuration::Seconds(FromString<i64>(*requestTimeout))));
+        } else if (const auto* xRequestTimeout = httpHeaders->Find(XRequestTimeoutHeaderName)) {
+            rpcHeader->set_timeout(ToProto(TDuration::MilliSeconds(FromString<i64>(*xRequestTimeout))));
         }
 
-        auto protocolMajor = httpHeaders->Find(ProtocolVersionMajor);
-        if (protocolMajor) {
+        if (const auto* protocolMajor = httpHeaders->Find(ProtocolVersionMajor)) {
             rpcHeader->set_protocol_version_major(FromString<i64>(*protocolMajor));
         }
 
-        auto protocolMinor = httpHeaders->Find(ProtocolVersionMinor);
-        if (protocolMinor) {
+        if (const auto* protocolMinor = httpHeaders->Find(ProtocolVersionMinor)) {
             rpcHeader->set_protocol_version_minor(FromString<i64>(*protocolMinor));
         }
 
@@ -368,8 +358,13 @@ private:
             *rpcHeader->MutableExtension(NRpc::NProto::TCustomMetadataExt::custom_metadata_ext) = std::move(customMetadataExt);
         }
 
-        rpcHeader->set_request_codec(ToProto<int>(NCompression::ECodec::None));
-        rpcHeader->set_response_codec(ToProto<int>(NCompression::ECodec::None));
+        rpcHeader->set_request_codec(ToProto(NCompression::ECodec::None));
+        rpcHeader->set_response_codec(ToProto(NCompression::ECodec::None));
+
+        ToProto(
+            rpcHeader->MutableExtension(NRpc::NProto::TRequestHeader::tracing_ext),
+            NTracing::TryGetCurrentTraceContext(),
+            /*sendBaggage*/ false);
 
         return {};
     }

@@ -25,7 +25,7 @@ namespace NFake {
 
                 delta.SetRedo(8000 /* always put blobs below to redo log */);
                 delta.AddTable("test" + ToString(table), table);
-                delta.SetRoom(table, 0 /* default room */, 1, 3, 2);
+                delta.SetRoom(table, 0 /* default room */, 1, {3}, 2);
 
                 if (Compress) { /* setup default family for page compression */
                     delta.AddFamily(table, 0, 0);
@@ -133,7 +133,7 @@ namespace NFake {
         }
 
     protected:
-        bool RegisterTable(ui32 table) noexcept
+        bool RegisterTable(ui32 table)
         {
             Y_ABORT_UNLESS(table < 8 * sizeof(Tables));
 

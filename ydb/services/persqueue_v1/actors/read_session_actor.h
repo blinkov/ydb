@@ -60,7 +60,8 @@ struct TPartitionActorInfo {
     ui64 MaxProcessedDirectReadId = 0;
     ui64 LastDirectReadId = 0;
 
-    std::map<i64, TDirectReadInfo> DirectReads;
+    std::map<ui64, TDirectReadInfo> DirectReads;
+    std::queue<ui64> PendingDirectReadAcks;
 
     explicit TPartitionActorInfo(
             const TActorId& actor,
@@ -191,6 +192,7 @@ private:
 
     static constexpr ui64 MAX_INFLY_BYTES = 25_MB;
     static constexpr ui32 MAX_INFLY_READS = 10;
+    static constexpr ui32 MAX_PENDING_DIRECT_READ_ACKS = 10;
 
     static constexpr ui64 MAX_READ_SIZE = 100_MB;
     static constexpr ui64 READ_BLOCK_SIZE = 8_KB; // metering
@@ -321,6 +323,7 @@ private:
     void CloseSession(PersQueue::ErrorCode::ErrorCode code, const TString& reason, const TActorContext& ctx);
     void SendLockPartitionToSelf(ui32 partitionId, TString topicName, TTopicHolder topic, const TActorContext& ctx);
 
+    void SetupBytesReadByUserAgentCounter();
     void SetupCounters();
     void SetupTopicCounters(const NPersQueue::TTopicConverterPtr& topic);
     void SetupTopicCounters(const NPersQueue::TTopicConverterPtr& topic,
@@ -329,11 +332,17 @@ private:
     void ProcessReads(const TActorContext& ctx);
     ui64 PrepareResponse(typename TFormedReadResponse<TServerMessage>::TPtr formedResponse);
     void ProcessAnswer(typename TFormedReadResponse<TServerMessage>::TPtr formedResponse, const TActorContext& ctx);
+    void ProcessDirectReads(
+        TPartitionsMap::iterator it,
+        const TActorContext& ctx
+    );
 
     void DropPartition(TPartitionsMapIterator& it, const TActorContext& ctx);
     void ReleasePartition(TPartitionsMapIterator& it, bool couldBeReads, const TActorContext& ctx);
     void SendReleaseSignal(TPartitionActorInfo& partition, bool kill, const TActorContext& ctx);
     void InformBalancerAboutRelease(TPartitionsMapIterator it, const TActorContext& ctx);
+
+    std::tuple<TString, ui32, ui64> GetReadFrom(const NPersQueue::TTopicConverterPtr& topic, const TActorContext& ctx) const;
 
     static ui32 NormalizeMaxReadMessagesCount(ui32 sourceValue);
     static ui32 NormalizeMaxReadSize(ui32 sourceValue);
@@ -342,6 +351,9 @@ private:
     std::unique_ptr</* type alias */ TEvStreamReadRequest> Request;
     const TString ClientDC;
     const TInstant StartTimestamp;
+
+    TString SdkBuildInfo;
+    TString UserAgent = UseMigrationProtocol ? "pqv1 server" : "topic server";
 
     TActorId SchemeCache;
     TActorId NewSchemeCache;
@@ -425,6 +437,8 @@ private:
     ::NMonitoring::TDynamicCounters::TCounterPtr Errors;
     ::NMonitoring::TDynamicCounters::TCounterPtr PipeReconnects;
     ::NMonitoring::TDynamicCounters::TCounterPtr BytesInflight;
+    ::NMonitoring::TDynamicCounters::TCounterPtr BytesReadByUserAgent;
+
     ui64 BytesInflight_;
     ui64 RequestedBytes;
     ui32 ReadsInfly;
