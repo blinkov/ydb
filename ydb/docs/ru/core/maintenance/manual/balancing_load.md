@@ -11,7 +11,7 @@
 
 ## Распределить VDisk'и равномерно по устройствам {#cluster-balance}
 
-В результате некоторых операций, например [декомиссии](../../devops/manual/decommissioning.md), VDisk'и могут быть распределены на блочных устройствах неравномерно. Улучшить равномерность распределения можно одним из способов:
+В результате некоторых операций, например [декомиссии](../../devops/deployment-options/manual/decommissioning.md), VDisk'и могут быть распределены на блочных устройствах неравномерно. Улучшить равномерность распределения можно одним из способов:
 
 * [Перевезти VDisk'и](moving_vdisks.md#moving_vdisk) по одному с перегруженных устройств.
 * Воспользоваться утилитой [{{ ydb-short-name }} DSTool](../../reference/ydb-dstool/index.md). Следующая команда перевезет VDisk с перегруженного устройства на менее нагруженное:
@@ -24,32 +24,18 @@
 
 ## Изменение количествa слотов для VDisk'ов на PDisk'ах
 
-Для добавления групп хранения требуется переопределить конфиг хоста, увеличив для него количество слотов на PDisk'ах.
+Для добавления групп хранения требуется переопределить конфиг хоста, увеличив для него количество слотов на PDisk'ах. Это можно осуществить, проделав следующие шаги:
 
-Перед этим требуется получить изменяемые конфиг, это можно сделать следующей командой:
-
-```proto
-Command {
-  TReadHostConfig{
-    HostConfigId: <host-config-id>
-  }
-}
-```
+1. Получить текущую конфигурацию кластера:
 
 ```bash
-ydbd -s <endpoint> admin bs config invoke --proto-file ReadHostConfig.txt
+ydb -e <endpoint> admin cluster config fetch > config.yaml
 ```
 
-Требуется вставить полученный конфиг в протобуф ниже и поменять в нем поле **PDiskConfig/ExpectedSlotCount**.
+2. Добавить (или изменить) поле `expected_slot_count` для нужного устройства `drive` в секции `host_configs`
 
-```proto
-Command {
-  TDefineHostConfig {
-    <хост конфиг>
-  }
-}
-```
+3. Загрузить обновленный конфигурационный файл на кластер:
 
 ```bash
-ydbd -s <endpoint> admin bs config invoke --proto-file DefineHostConfig.txt
+ydb -e <endpoint> admin cluster config replace -f config.yaml
 ```

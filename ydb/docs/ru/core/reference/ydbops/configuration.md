@@ -46,14 +46,12 @@ ydbops restart \
 
 ```yaml
 current-profile: my-profile
-profiles:
-  my-profile:
-    endpoint: grpcs://<hostname>:2135
-    ca-file: ~/<ca-certificate-file>
-    user: <username>
-    password-file: ~/<password-file>
-    k8s-namespace: <k8s-namespace>
-    kubeconfig: ~/.kube/config
+my-profile:
+  endpoint: grpc://<hostname>:2135
+  user: admin
+  password-file: ~/<password-file>
+  k8s-namespace: <k8s-namespace>
+  kubeconfig: ~/.kube/config
 ```
 
 ### Команды управления профилями
@@ -71,24 +69,22 @@ profiles:
 # использования в качестве активного профиля по умолчанию при вызове CLI
 current-profile: my-profile
 
-# Описание профилей помещается в ключ `profiles`
-profiles:
-  my-profile:
-    endpoint: grpcs://your.ydb.cluster.fqdn:2135
+my-profile:
+  endpoint: grpc://your.ydb.cluster.fqdn:2135
 
-    # расположение файла CA при использовании grpcs в endpoint
-    ca-file: /path/to/custom/ca/file
+  # расположение файла CA при использовании grpcs в endpoint
+  ca-file: /path/to/custom/ca/file
 
-    # имя пользователя и файл пароля, если используется аутентификация при помощи логина и пароля:
-    user: your-ydb-user-name
-    password-file: /path/to/password-file
+  # имя пользователя и файл пароля, если используется аутентификация при помощи логина и пароля:
+  user: your-ydb-user-name
+  password-file: /path/to/password-file
 
-    # если используется аутентификация при помощи access token
-    token-file: /path/to/ydb/token
+  # если используется аутентификация при помощи access token
+  token-file: /path/to/ydb/token
 
-    # если идет работа с YDB кластерами под Kubernetes, можно указать путь к kubeconfig:
-    kubeconfig: /path/to/kube/config
-    k8s-namespace: <k8s-namespace>
+  # если идет работа с YDB кластерами под Kubernetes, можно указать путь к kubeconfig:
+  kubeconfig: /path/to/kube/config
+  k8s-namespace: <k8s-namespace>
 ```
 
 ## Переменные окружения {#environment-variables}

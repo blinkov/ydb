@@ -1,0 +1,7 @@
+```yaml
+items:
+  - name: "Setting Up Kafka Connect: Step-by-Step Guide"
+    href: connect-step-by-step.md
+  - name: Connector Configuration Examples
+    href: connect-examples.md
+```
