@@ -43,5 +43,11 @@ if ! yfm -i . -o $DIR --allowHTML  --apply-presets; then
   exit 1
 fi
 
-start_server $DIR
+if [ -z "${NO_SERVER}" ]; then
+  start_server $DIR
+else
+  echo
+  echo "HTTP server start skipped (NO_SERVER is set)"
+  echo "Documentation is available at: $DIR"
+fi
 
