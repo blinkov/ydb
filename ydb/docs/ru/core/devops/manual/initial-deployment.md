@@ -8,7 +8,7 @@
 
 ### Требования {#requirements}
 
-Ознакомьтесь с [системными требованиями](../../devops/system-requirements.md) и [топологией кластера](../../concepts/topology.md).
+Ознакомьтесь с [системными требованиями](../../../devops/concepts/system-requirements.md) и [топологией кластера](../../../concepts/topology.md).
 
 У вас должен быть SSH доступ на все сервера. Это необходимо для установки артефактов и запуска исполняемого файла {{ ydb-short-name }}.
 
@@ -27,8 +27,8 @@
 
 Выберите серверы и диски, которые будут использоваться для хранения данных:
 
-* Используйте схему отказоустойчивости `block-4-2` для развертывания кластера в одной зоне доступности (AZ). Чтобы переживать отказ 2 серверов, используйте не менее 8 серверов.
-* Используйте схему отказоустойчивости `mirror-3-dc` для развертывания кластера в трех зонах доступности (AZ). Чтобы переживать отказ 1 AZ и 1 сервера в другой AZ, используйте не менее 9 серверов. Количество задействованных серверов в каждой AZ должно быть одинаковым.
+* Используйте схему отказоустойчивости `block-4-2` для развертывания кластера в одной зоне доступности (AZ), задействуя не менее 8 серверов. Данная схема позволяет переживать отказ 2 серверов.
+* Используйте схему отказоустойчивости `mirror-3-dc` для развертывания кластера в трех зонах доступности (AZ), задействуя не менее 9 серверов. Данная схема позволяет переживать отказ 1 AZ и 1 сервера в другой AZ. Количество задействованных серверов в каждой AZ должно быть одинаковым.
 
 {% note info %}
 
@@ -36,7 +36,7 @@
 
 {% endnote %}
 
-Подробнее требования к оборудованию описаны в разделе [{#T}](../../devops/system-requirements.md).
+Подробнее требования к оборудованию описаны в разделе [{#T}](../../../devops/concepts/system-requirements.md).
 
 ### Подготовка ключей и сертификатов TLS {#tls-certificates}
 
@@ -86,6 +86,12 @@ sudo usermod -aG disk ydb
     curl -L {{ ydb-binaries-url }}/{{ ydb-stable-binary-archive }} | tar -xz --strip-component=1 -C ydbd-stable-linux-amd64
     ```
 
+1. Создайте директории для размещения программного обеспечения {{ ydb-short-name }}:
+
+    ```bash
+    sudo mkdir -p /opt/ydb /opt/ydb/cfg
+    ```
+
 1. Скопируйте исполняемый файл и библиотеки в соответствующие директории:
 
     ```bash
@@ -101,26 +107,7 @@ sudo usermod -aG disk ydb
 
 ## Подготовьте и очистите диски на каждом сервере {#prepare-disks}
 
-{% include [_includes/storage-device-requirements.md](../../_includes/storage-device-requirements.md) %}
-
-Получить список блочных устройств на сервере можно командой `lsblk`. Пример вывода:
-
-```txt
-NAME   MAJ:MIN RM   SIZE RO TYPE MOUNTPOINTS
-loop0    7:0    0  63.3M  1 loop /snap/core20/1822
-...
-vda    252:0    0    40G  0 disk
-├─vda1 252:1    0     1M  0 part
-└─vda2 252:2    0    40G  0 part /
-vdb    252:16   0   186G  0 disk
-└─vdb1 252:17   0   186G  0 part
-```
-
-Названия блочных устройств зависят от настроек операционной системы, заданных базовым образом или настроенных вручную. Обычно имена устройств состоят из трех частей:
-
-- Фиксированный префикс или префикс, указывающий на тип устройства
-- Последовательный идентификатор устройства (может быть буквой или числом)
-- Последовательный идентификатор раздела на данном устройстве (обычно число)
+{% include [_includes/storage-device-requirements.md](../../../_includes/storage-device-requirements.md) %}
 
 1. Создайте разделы на выбранных дисках:
 
@@ -138,7 +125,7 @@ vdb    252:16   0   186G  0 disk
     sudo partx --u ${DISK}
     ```
 
-    Выполните команду `ls -l /dev/disk/by-partlabel/`, чтобы убедиться что в системе появился диск с меткой `/dev/disk/by-partlabel/ydb_disk_ssd_01`.
+    После выполнения в системе появится диск с меткой `/dev/disk/by-partlabel/ydb_disk_ssd_01`.
 
     Если вы планируете использовать более одного диска на каждом сервере, укажите для каждого свою уникальную метку вместо `ydb_disk_ssd_01`. Метки дисков должны быть уникальны в рамках каждого сервера, и используются в конфигурационных файлах, как показано в последующих инструкциях.
 
@@ -146,11 +133,11 @@ vdb    252:16   0   186G  0 disk
 
 2. Очистите диск встроенной в исполняемый файл `ydbd` командой:
 
-{% note warning %}
+    {% note warning %}
 
-После выполнения команды данные на диске сотрутся.
+    После выполнения команды данные на диске сотрутся.
 
-{% endnote %}
+    {% endnote %}
 
     ```bash
     sudo LD_LIBRARY_PATH=/opt/ydb/lib /opt/ydb/bin/ydbd admin bs disk obliterate /dev/disk/by-partlabel/ydb_disk_ssd_01
@@ -164,9 +151,9 @@ vdb    252:16   0   186G  0 disk
 
 1. Скачайте пример конфига для соответствующей модели отказа вашего кластера:
 
-    * [block-4-2](https://github.com/ydb-platform/ydb/blob/stable-23-3/ydb/deploy/yaml_config_examples/block-4-2.yaml) - для однодатацентрового кластера.
-    * [mirror-3dc](https://github.com/ydb-platform/ydb/blob/stable-23-3/ydb/deploy/yaml_config_examples/mirror-3dc-9-nodes.yaml) - для cross-DC кластера из 9 нод.
-    * [mirror-3dc-3nodes](https://github.com/ydb-platform/ydb/blob/stable-23-3//ydb/deploy/yaml_config_examples/mirror-3dc-3-nodes.yaml) - для cross-DC кластера из 3 нод.
+    * [block-4-2](https://github.com/ydb-platform/ydb/blob/main/ydb/deploy/yaml_config_examples/block-4-2.yaml) - для однодатацентрового кластера.
+    * [mirror-3dc](https://github.com/ydb-platform/ydb/blob/main/ydb/deploy/yaml_config_examples/mirror-3dc-9-nodes.yaml) - для cross-DC кластера из 9 нод.
+    * [mirror-3dc-3nodes](https://github.com/ydb-platform/ydb/blob/main/ydb/deploy/yaml_config_examples/mirror-3dc-3-nodes.yaml) - для cross-DC кластера из 3 нод.
 
 1. В секции `host_configs` укажите все диски и их тип на каждой из нод кластера. Возможные варианты типов дисков:
 
@@ -205,53 +192,47 @@ vdb    252:16   0   186G  0 disk
         rack: '1'
     ```
 
-1. В секции `blob_storage_config` скорректируйте FQDN всех нод, используемых для размещения статической группы хранения:
-
-    * для схемы `mirror-3-dc` необходимо указать FQDN для 9 нод;
-    * для схемы `block-4-2` необходимо указать FQDN для 8 нод.
-
 1. Включите аутентификацию пользователей (опционально).
 
-    Если вы планируете использовать в кластере {{ ydb-short-name }} возможности аутентификации и разграничения доступа пользователей, добавьте в секцию `domains_config` следующие дополнительные параметры:
+    Если вы планируете использовать в кластере {{ ydb-short-name }} возможности аутентификации и разграничения доступа пользователей, добавьте секцию `security_config` со следующими параметрами:
 
     ```yaml
-    domains_config:
-      security_config:
-        enforce_user_token_requirement: true
-        monitoring_allowed_sids:
-        - "root"
-        - "ADMINS"
-        - "DATABASE-ADMINS"
-        administration_allowed_sids:
-        - "root"
-        - "ADMINS"
-        - "DATABASE-ADMINS"
-        viewer_allowed_sids:
-        - "root"
-        - "ADMINS"
-        - "DATABASE-ADMINS"
+    security_config:
+      enforce_user_token_requirement: true
+      monitoring_allowed_sids:
+      - "root"
+      - "ADMINS"
+      - "DATABASE-ADMINS"
+      administration_allowed_sids:
+      - "root"
+      - "ADMINS"
+      - "DATABASE-ADMINS"
+      viewer_allowed_sids:
+      - "root"
+      - "ADMINS"
+      - "DATABASE-ADMINS"
     ```
 
 При использовании режима шифрования трафика убедитесь в наличии в конфигурационном файле {{ ydb-short-name }} установленных путей к файлам ключей и сертификатов в секциях `interconnect_config` и `grpc_config`:
 
 ```yaml
 interconnect_config:
-    start_tcp: true
-    encryption_mode: OPTIONAL
-    path_to_certificate_file: "/opt/ydb/certs/node.crt"
-    path_to_private_key_file: "/opt/ydb/certs/node.key"
-    path_to_ca_file: "/opt/ydb/certs/ca.crt"
+  start_tcp: true
+  encryption_mode: OPTIONAL
+  path_to_certificate_file: "/opt/ydb/certs/node.crt"
+  path_to_private_key_file: "/opt/ydb/certs/node.key"
+  path_to_ca_file: "/opt/ydb/certs/ca.crt"
 grpc_config:
-    cert: "/opt/ydb/certs/node.crt"
-    key: "/opt/ydb/certs/node.key"
-    ca: "/opt/ydb/certs/ca.crt"
-    services_enabled:
-    - legacy
+  cert: "/opt/ydb/certs/node.crt"
+  key: "/opt/ydb/certs/node.key"
+  ca: "/opt/ydb/certs/ca.crt"
+  services_enabled:
+  - legacy
 ```
 
-Сохраните конфигурационный файл {{ ydb-short-name }} под именем `/tmp/config.yaml` на каждом сервере кластера.
+Сохраните конфигурационный файл {{ ydb-short-name }} под именем `/opt/ydb/cfg/config.yaml` на каждом сервере кластера.
 
-Более подробная информация по созданию файла конфигурации приведена в разделе [{#T}](../../reference/configuration/index.md).
+Более подробная информация по созданию файла конфигурации приведена в разделе [{#T}](../../../reference/configuration/index.md).
 
 ## Скопируйте ключи и сертификаты TLS на каждый сервер {#tls-copy-cert}
 
@@ -267,18 +248,6 @@ sudo chown -R ydb:ydb /opt/ydb/certs
 sudo chmod 700 /opt/ydb/certs
 ```
 
-## Подготовьте конфигурацию на статических узлах кластера
-
-Создайте на каждой машине пустую директорию `opt/ydb/cfg` для работы кластера с конфигурацией. Если на одной машине запускается несколько узлов, используйте одну и ту же директорию. Выполнив специальную команду на каждой машине, инициализируйте эту директорию файлом конфигурации.
-
-```bash
-sudo mkdir -p /opt/ydb/cfg
-sudo chown -R ydb:ydb /opt/ydb/cfg
-ydb admin node config init --config-dir /opt/ydb/cfg --from-config /tmp/config.yaml
-```
-
-Исходный файл `/tmp/config.yaml` после выполнения этой команды больше не используется, его можно удалить.
-
 ## Запустите статические узлы {#start-storage}
 
 {% list tabs group=manual-systemd %}
@@ -291,7 +260,7 @@ ydb admin node config init --config-dir /opt/ydb/cfg --from-config /tmp/config.y
   sudo su - ydb
   cd /opt/ydb
   export LD_LIBRARY_PATH=/opt/ydb/lib
-  /opt/ydb/bin/ydbd server --log-level 3 --syslog --tcp --config-dir /opt/ydb/cfg \
+  /opt/ydb/bin/ydbd server --log-level 3 --syslog --tcp --yaml-config  /opt/ydb/cfg/config.yaml \
       --grpcs-port 2135 --ic-port 19001 --mon-port 8765 --mon-cert /opt/ydb/certs/web.pem --node static
   ```
 
@@ -319,7 +288,7 @@ ydb admin node config init --config-dir /opt/ydb/cfg --from-config /tmp/config.y
   SyslogLevel=err
   Environment=LD_LIBRARY_PATH=/opt/ydb/lib
   ExecStart=/opt/ydb/bin/ydbd server --log-level 3 --syslog --tcp \
-      --config-dir /opt/ydb/cfg \
+      --yaml-config  /opt/ydb/cfg/config.yaml \
       --grpcs-port 2135 --ic-port 19001 --mon-port 8765 \
       --mon-cert /opt/ydb/certs/web.pem --node static
   LimitNOFILE=65536
@@ -350,13 +319,13 @@ ydb admin node config init --config-dir /opt/ydb/cfg --from-config /tmp/config.y
 
 - Аутентификация включена
 
-  Для выполнения административных команд (включая инициализацию кластера, создание баз данных, управление дисками и другие) в кластере со включённым режимом аутентификации пользователей необходимо предварительно получить аутентификационный токен с использованием клиента {{ ydb-short-name }} CLI версии 2.0.0 или выше. Клиент {{ ydb-short-name }} CLI следует установить на любом компьютере, имеющем сетевой доступ к узлам кластера (например, на одном из узлов кластера), в соответствии с [инструкцией по установке](../../reference/ydb-cli/install.md).
+  Для выполнения административных команд (включая инициализацию кластера, создание баз данных, управление дисками и другие) в кластере со включённым режимом аутентификации пользователей необходимо предварительно получить аутентификационный токен с использованием клиента {{ ydb-short-name }} CLI версии 2.0.0 или выше. Клиент {{ ydb-short-name }} CLI следует установить на любом компьютере, имеющем сетевой доступ к узлам кластера (например, на одном из узлов кластера), в соответствии с [инструкцией по установке](../../../reference/ydb-cli/install.md).
 
   При первоначальной установке кластера в нём существует единственная учётная запись `root` с пустым паролем, поэтому команда получения токена выглядит следующим образом:
 
   ```bash
   ydb -e grpcs://<node1.ydb.tech>:2135 -d /Root --ca-file ca.crt \
-       --user root --no-password auth get-token --force >token-file
+       --user root --no-password auth get-token --force > token-file
   ```
 
   В качестве сервера для подключения (параметр `-e` или `--endpoint`) может быть указан любой из серверов хранения в составе кластера.
@@ -365,8 +334,8 @@ ydb admin node config init --config-dir /opt/ydb/cfg --from-config /tmp/config.y
 
   ```bash
   export LD_LIBRARY_PATH=/opt/ydb/lib
-  /opt/ydb/bin/ydbd -f token-file --ca-file ca.crt -s grpcs://`hostname -f`:2135 \
-      admin blobstorage config init --yaml-file  /opt/ydb/cfg/config.yaml
+  ydb --token-file token-file --ca-file ca.crt -e grpcs://<node.ydb.tech>:2135 \
+      admin cluster bootstrap --uuid <строка>
   echo $?
   ```
 
@@ -376,8 +345,8 @@ ydb admin node config init --config-dir /opt/ydb/cfg --from-config /tmp/config.y
 
   ```bash
   export LD_LIBRARY_PATH=/opt/ydb/lib
-  /opt/ydb/bin/ydbd --ca-file ca.crt -s grpcs://`hostname -f`:2135 \
-      admin blobstorage config init --yaml-file  /opt/ydb/cfg/config.yaml
+  ydb --ca-file ca.crt -e grpcs://<node.ydb.tech>:2135 \
+      admin cluster bootstrap --uuid <строка>
   echo $?
   ```
 
@@ -405,7 +374,7 @@ ydb admin node config init --config-dir /opt/ydb/cfg --from-config /tmp/config.y
 
   ```bash
   export LD_LIBRARY_PATH=/opt/ydb/lib
-  /opt/ydb/bin/ydbd -f token-file --ca-file ca.crt -s grpcs://`hostname -f`:2135 \
+  /opt/ydb/bin/ydbd -f token-file --ca-file ca.crt -s grpcs://`hostname -s`:2135 \
       admin database /Root/testdb create ssd:1
   echo $?
   ```
@@ -431,16 +400,6 @@ ydb admin node config init --config-dir /opt/ydb/cfg --from-config /tmp/config.y
 * `testdb` - имя создаваемой базы данных;
 * `ssd:1` - имя пула хранения и количество выделяемых групп хранения. Имя пула обычно означает тип устройств хранения данных и должно соответствовать настройке `storage_pool_types`.`kind` внутри элемента `domains_config`.`domain` файла конфигурации.
 
-Создайте на каждом динамическом узле директорию `/opt/ydb/cfg` для работы кластера с конфигурацией. В случае поднятия нескольких узлов на одной машине, используйте одну и ту же директорию. Выполнив специальную команду на каждой машине, инициализируйте эту директорию с использованием произвольного статического узла кластера в качестве источника конфигурации.
-
-```bash
-sudo mkdir -p /opt/ydb/cfg
-sudo chown -R ydb:ydb /opt/ydb/cfg
-ydb admin node config init --config-dir /opt/ydb/cfg --seed-node <node.ydb.tech:2135>
-```
-
-В примере команды выше `<node.ydb.tech>` - FQDN статического узла кластера, с которого будет загружен файл конфигурации.
-
 ## Запустите динамические узлы {#start-dynnode}
 
 {% list tabs group=manual-systemd %}
@@ -456,8 +415,7 @@ ydb admin node config init --config-dir /opt/ydb/cfg --seed-node <node.ydb.tech:
   /opt/ydb/bin/ydbd server --grpcs-port 2136 --grpc-ca /opt/ydb/certs/ca.crt \
       --ic-port 19002 --ca /opt/ydb/certs/ca.crt \
       --mon-port 8766 --mon-cert /opt/ydb/certs/web.pem \
-      --config-dir /opt/ydb/cfg \
-      --tenant /Root/testdb \
+      --yaml-config  /opt/ydb/cfg/config.yaml --tenant /Root/testdb \
       --node-broker grpcs://<ydb1>:2135 \
       --node-broker grpcs://<ydb2>:2135 \
       --node-broker grpcs://<ydb3>:2135
@@ -492,8 +450,7 @@ ydb admin node config init --config-dir /opt/ydb/cfg --seed-node <node.ydb.tech:
       --grpcs-port 2136 --grpc-ca /opt/ydb/certs/ca.crt \
       --ic-port 19002 --ca /opt/ydb/certs/ca.crt \
       --mon-port 8766 --mon-cert /opt/ydb/certs/web.pem \
-      --config-dir /opt/ydb/cfg \
-      --tenant /Root/testdb \
+      --yaml-config  /opt/ydb/cfg/config.yaml --tenant /Root/testdb \
       --node-broker grpcs://<ydb1>:2135 \
       --node-broker grpcs://<ydb2>:2135 \
       --node-broker grpcs://<ydb3>:2135
@@ -521,11 +478,11 @@ ydb admin node config init --config-dir /opt/ydb/cfg --seed-node <node.ydb.tech:
 
 Если в файле настроек кластера включен режим аутентификации, то перед началом работы с кластером {{ ydb-short-name }} необходимо выполнить первоначальную настройку учетных записей.
 
-При первоначальной установке кластера {{ ydb-short-name }} автоматически создается учетная запись `root` с пустым паролем, а также стандартный набор групп пользователей, описанный в разделе [{#T}](../../security/builtin-security.md).
+При первоначальной установке кластера {{ ydb-short-name }} автоматически создается учетная запись `root` с пустым паролем, а также стандартный набор групп пользователей, описанный в разделе [{#T}](../../../security/builtin-security.md).
 
 Для выполнения первоначальной настройки учетных записей в созданном кластере {{ ydb-short-name }} выполните следующие операции:
 
-1. Установите {{ ydb-short-name }} CLI, как описано в [документации](../../reference/ydb-cli/install.md).
+1. Установите {{ ydb-short-name }} CLI, как описано в [документации](../../../reference/ydb-cli/install.md).
 
 1. Выполните установку пароля учетной записи `root`:
 
@@ -534,27 +491,29 @@ ydb admin node config init --config-dir /opt/ydb/cfg --seed-node <node.ydb.tech:
         yql -s 'ALTER USER root PASSWORD "passw0rd"'
     ```
 
-    Вместо значения `passw0rd` подставьте необходимый пароль. Сохраните пароль в отдельный файл. Последующие команды от имени пользователя `root` будут выполняться с использованием пароля, передаваемого с помощью ключа `--password-file <path_to_user_password>`. Также пароль можно сохранить в профиле подключения, как описано в [документации {{ ydb-short-name }} CLI](../../reference/ydb-cli/profile/index.md).
+    Вместо значения `passw0rd` подставьте необходимый пароль.
 
 1. Создайте дополнительные учетные записи:
 
     ```bash
-    ydb --ca-file ca.crt -e grpcs://<node.ydb.tech>:2136 -d /Root/testdb --user root --password-file <path_to_root_pass_file> \
+    ydb --ca-file ca.crt -e grpcs://<node.ydb.tech>:2136 -d /Root/testdb --user root \
         yql -s 'CREATE USER user1 PASSWORD "passw0rd"'
     ```
 
 1. Установите права учетных записей, включив их во встроенные группы:
 
     ```bash
-    ydb --ca-file ca.crt -e grpcs://<node.ydb.tech>:2136 -d /Root/testdb --user root --password-file <path_to_root_pass_file> \
+    ydb --ca-file ca.crt -e grpcs://<node.ydb.tech>:2136 -d /Root/testdb --user root \
         yql -s 'ALTER GROUP `ADMINS` ADD USER user1'
     ```
 
-В перечисленных выше примерах команд `<node.ydb.tech>` — FQDN сервера, на котором запущен любой динамический узел, обслуживающий базу `/Root/testdb`. При подключении по SSH к динамическому узлу {{ ydb-short-name }} удобно использовать конструкцию `grpcs://$(hostname -f):2136` для получения FQDN.
+В перечисленных выше примерах команд `<node.ydb.tech>` - FQDN сервера, на котором запущен любой динамический узел, обслуживающий базу `/Root/testdb`.
+
+При выполнении команд создания учётных записей и присвоения групп клиент {{ ydb-short-name }} CLI будет запрашивать ввод пароля пользователя `root`. Избежать многократного ввода пароля можно, создав профиль подключения, как описано в [документации {{ ydb-short-name }} CLI](../../../reference/ydb-cli/profile/index.md).
 
 ## Протестируйте работу с созданной базой {#try-first-db}
 
-1. Установите {{ ydb-short-name }} CLI, как описано в [документации](../../reference/ydb-cli/install.md).
+1. Установите {{ ydb-short-name }} CLI, как описано в [документации](../../../reference/ydb-cli/install.md).
 
 1. Создайте тестовую строковую (`test_row_table`) или колоночную таблицу (`test_column_table`):
 
@@ -584,7 +543,7 @@ ydb admin node config init --config-dir /opt/ydb/cfg --seed-node <node.ydb.tech:
 
 В Web-браузере должно быть настроено доверие в отношении центра регистрации, выпустившего сертификаты для кластера {{ ydb-short-name }}, в противном случае будет отображено предупреждение об использовании недоверенного сертификата.
 
-Если в кластере включена аутентификация, в Web-браузере должен отобразиться запрос логина и пароля. После ввода верных данных аутентификации должна отобразиться начальная страница встроенного web-интерфейса. Описание доступных функций и пользовательского интерфейса приведено в разделе [{#T}](../../reference/embedded-ui/index.md).
+Если в кластере включена аутентификация, в Web-браузере должен отобразиться запрос логина и пароля. После ввода верных данных аутентификации должна отобразиться начальная страница встроенного web-интерфейса. Описание доступных функций и пользовательского интерфейса приведено в разделе [{#T}](../../../reference/embedded-ui/index.md).
 
 {% note info %}
 
@@ -618,7 +577,7 @@ ydb admin node config init --config-dir /opt/ydb/cfg --seed-node <node.ydb.tech:
 
     ```bash
     export LD_LIBRARY_PATH=/opt/ydb/lib
-    /opt/ydb/bin/ydbd admin blobstorage config init --yaml-file  /opt/ydb/cfg/config.yaml
+    ydb admin blobstorage bootstrap --uuid <строка>
     echo $?
     ```
 
