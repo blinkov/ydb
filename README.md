@@ -5,6 +5,7 @@
 [![Discord](https://img.shields.io/discord/1158573985894772827?logo=discord&logoColor=%23fff)](https://discord.gg/R5MvZTESWc)
 
 ## YDB
+'
 
 [Website](https://ydb.tech) |
 [Documentation](https://ydb.tech/docs/en/) |
