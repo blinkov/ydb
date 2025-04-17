@@ -6,7 +6,8 @@
 
 ## YDB
 
-'
+''
+
 
 [Website](https://ydb.tech) |
 [Documentation](https://ydb.tech/docs/en/) |
