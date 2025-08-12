@@ -46,6 +46,8 @@ More information is available at <https://ydb.tech/docs/en/contributor/build-ya>
 
 - Follow the style guide: <https://ydb.tech/docs/en/contributor/documentation/style-guide>
 - Keep the structure consistent: <https://ydb.tech/docs/en/contributor/documentation/structure>
+- Ensure each article focuses only one genre: <https://ydb.tech/docs/en/contributor/documentation/genres>
+- Check adherence with the same guidelines and suggest relevant fixes when reviewing pull requests with any changes to Markdown files.
 
 ## Pull Request Guidelines for AI Agents
 
