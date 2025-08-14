@@ -2,7 +2,7 @@
 
 ## Version 2.24.1 {#2-24-1}
 
-Released on July 28, 2025. To update to version **2.24.1**, select the [Downloads](downloads/ydb-cli.md) section.
+Reledfgdfgased on July 28, 2025. To update to version **2.24.1**, select the [Downloads](downloads/ydb-cli.md) section.
 
 ### Bug fixes
 
